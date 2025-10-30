@@ -1,4 +1,4 @@
-import { Component, OnInit, PLATFORM_ID, inject } from '@angular/core';
+import { Component, OnInit, PLATFORM_ID, ViewChild, ElementRef, inject } from '@angular/core';
 import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 
 import * as THREE from 'three';
@@ -18,6 +18,8 @@ export class CanvasComponent implements OnInit {
   public renderer!: THREE.WebGLRenderer;
   private readonly platformId = inject(PLATFORM_ID);
   private readonly document = inject(DOCUMENT);
+  @ViewChild('container', { static: true }) private containerRef!: ElementRef<HTMLDivElement>;
+  private animateHandle?: number;
 
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
@@ -26,13 +28,18 @@ export class CanvasComponent implements OnInit {
   }
 
   private init(): void {
-    const container = this.document.createElement('div');
-    this.document.body.appendChild(container);
+    const container = this.containerRef.nativeElement;
 
-    this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.25, 20);
+    this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.25, 20);
     this.camera.position.set(-1.8, 0.6, 2.7);
 
     this.scene = new THREE.Scene();
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    this.scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 10, 7.5);
+    this.scene.add(directionalLight);
 
     const loader = new GLTFLoader().setPath('assets/');
     loader.load('old_computers.glb', async (glb) => {
@@ -44,7 +51,7 @@ export class CanvasComponent implements OnInit {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
     container.appendChild(this.renderer.domElement);
@@ -57,16 +64,27 @@ export class CanvasComponent implements OnInit {
     controls.update();
 
     window.addEventListener('resize', () => this.onWindowResize());
+
+    this.startAnimationLoop();
   }
 
   private onWindowResize(): void {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
+    const container = this.containerRef.nativeElement;
+    this.camera.aspect = container.clientWidth / container.clientHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.render();
   }
 
   private render(): void {
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private startAnimationLoop(): void {
+    const loop = () => {
+      this.render();
+      this.animateHandle = requestAnimationFrame(loop);
+    };
+    this.animateHandle = requestAnimationFrame(loop);
   }
 }
