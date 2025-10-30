@@ -1,18 +1,18 @@
-import { Component, OnInit, PLATFORM_ID, ViewChild, ElementRef, inject } from '@angular/core';
-import { DOCUMENT, isPlatformBrowser } from '@angular/common';
+import { Component, OnInit, OnDestroy, PLATFORM_ID, ViewChild, ElementRef, inject } from '@angular/core';
+import { DOCUMENT, isPlatformBrowser, CommonModule } from '@angular/common';
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { FlyControls } from 'three/examples/jsm/controls/FlyControls';
 
 @Component({
   selector: 'app-canvas',
   standalone: true,
-  imports: [],
+  imports: [CommonModule],
   templateUrl: './canvas.component.html',
   styleUrls: ['./canvas.component.scss']
 })
-export class CanvasComponent implements OnInit {
+export class CanvasComponent implements OnInit, OnDestroy {
   public scene!: THREE.Scene;
   public camera!: THREE.PerspectiveCamera;
   public renderer!: THREE.WebGLRenderer;
@@ -20,6 +20,11 @@ export class CanvasComponent implements OnInit {
   private readonly document = inject(DOCUMENT);
   @ViewChild('container', { static: true }) private containerRef!: ElementRef<HTMLDivElement>;
   private animateHandle?: number;
+  private clock = new THREE.Clock();
+  private keyState: Record<string, boolean> = {};
+  private baseSpeed = 2.0; // units per second
+  private onResize = () => this.onWindowResize();
+  private flyControls?: FlyControls;
 
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
@@ -31,7 +36,10 @@ export class CanvasComponent implements OnInit {
     const container = this.containerRef.nativeElement;
 
     this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.25, 20);
-    this.camera.position.set(-1.8, 0.6, 2.7);
+    // Set refined initial transform
+    this.camera.position.set(1.11, 3.83, 8.51);
+    this.camera.quaternion.set(-0.110, 0.047, 0.005, 0.993);
+
 
     this.scene = new THREE.Scene();
 
@@ -56,14 +64,15 @@ export class CanvasComponent implements OnInit {
     this.renderer.toneMappingExposure = 1;
     container.appendChild(this.renderer.domElement);
 
-    const controls = new OrbitControls(this.camera, this.renderer.domElement);
-    controls.addEventListener('change', () => this.render());
-    controls.minDistance = 2;
-    controls.maxDistance = 10;
-    controls.target.set(0, 0, -0.2);
-    controls.update();
+    this.flyControls = new FlyControls(this.camera, this.renderer.domElement);
+    this.flyControls.movementSpeed = 5;
+    this.flyControls.rollSpeed = Math.PI / 6; // adjust turn rate
+    this.flyControls.dragToLook = true; // hold mouse to look
+    this.flyControls.autoForward = false;
 
-    window.addEventListener('resize', () => this.onWindowResize());
+    window.addEventListener('resize', this.onResize);
+    window.addEventListener('keydown', this.onKeyDown, false);
+    window.addEventListener('keyup', this.onKeyUp, false);
 
     this.startAnimationLoop();
   }
@@ -82,9 +91,88 @@ export class CanvasComponent implements OnInit {
 
   private startAnimationLoop(): void {
     const loop = () => {
+      const delta = this.clock.getDelta();
+      if (this.flyControls) this.flyControls.update(delta);
+      this.updateCameraFromKeys(delta);
       this.render();
       this.animateHandle = requestAnimationFrame(loop);
     };
     this.animateHandle = requestAnimationFrame(loop);
+  }
+
+  private updateCameraFromKeys(delta: number): void {
+    if (this.flyControls) {
+      // FlyControls already handles WASD/EQ + mouse look; skip manual movement to avoid conflicts
+      return;
+    }
+    const speed = this.baseSpeed * delta;
+
+    const direction = new THREE.Vector3();
+    this.camera.getWorldDirection(direction);
+
+    const move = new THREE.Vector3();
+
+    // Forward / Back (W / S)
+    if (this.keyState['KeyW']) {
+      const v = direction.clone().multiplyScalar(speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+    if (this.keyState['KeyS']) {
+      const v = direction.clone().multiplyScalar(-speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+
+    // Strafe Left / Right (A / D)
+    const right = new THREE.Vector3().crossVectors(direction, this.camera.up).normalize();
+    if (this.keyState['KeyD']) {
+      const v = right.clone().multiplyScalar(speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+    if (this.keyState['KeyA']) {
+      const v = right.clone().multiplyScalar(-speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+
+    // Up / Down (Space / Shift)
+    const up = this.camera.up.clone().normalize();
+    if (this.keyState['Space']) {
+      const v = up.clone().multiplyScalar(speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+    if (this.keyState['ShiftLeft'] || this.keyState['ShiftRight']) {
+      const v = up.clone().multiplyScalar(-speed);
+      this.camera.position.add(v);
+      move.add(v);
+    }
+
+    // no target to sync when using FlyControls or manual free camera
+  }
+
+  private onKeyDown = (event: KeyboardEvent) => {
+    this.keyState[event.code] = true;
+  };
+
+  private onKeyUp = (event: KeyboardEvent) => {
+    this.keyState[event.code] = false;
+    if (event.code === 'KeyC' && this.camera) {
+      // Quick dump to console for copy/paste
+      const p = this.camera.position;
+      const r = this.camera.rotation;
+      console.log('Camera position:', { x: p.x, y: p.y, z: p.z });
+      console.log('Camera rotation (radians):', { x: r.x, y: r.y, z: r.z });
+    }
+  };
+
+  ngOnDestroy(): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+    window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('keydown', this.onKeyDown, false);
+    window.removeEventListener('keyup', this.onKeyUp, false);
+    if (this.animateHandle) cancelAnimationFrame(this.animateHandle);
   }
 }

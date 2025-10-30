@@ -11,3 +11,22 @@
   overflow: hidden;
 }
 
+.camera-debug {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.camera-debug .hint {
+  margin-top: 6px;
+  opacity: 0.8;
+}
+

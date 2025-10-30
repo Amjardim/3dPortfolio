@@ -1,1 +1,7 @@
 <div class="canvas-container" #container></div>
+<div class="camera-debug" *ngIf="camera">
+  <div><strong>Position</strong>: x: {{ camera.position.x | number:'1.2-2' }}, y: {{ camera.position.y | number:'1.2-2' }}, z: {{ camera.position.z | number:'1.2-2' }}</div>
+  <div><strong>Rotation</strong>: x: {{ camera.rotation.x | number:'1.2-2' }}, y: {{ camera.rotation.y | number:'1.2-2' }}, z: {{ camera.rotation.z | number:'1.2-2' }}</div>
+  <div><strong>Quaternion</strong>: x: {{ camera.quaternion.x | number:'1.3-3' }}, y: {{ camera.quaternion.y | number:'1.3-3' }}, z: {{ camera.quaternion.z | number:'1.3-3' }}, w: {{ camera.quaternion.w | number:'1.3-3' }}</div>
+  <div class="hint">W/S: forward/back, A/D: left/right, Space: up, Shift: down</div>
+</div>
