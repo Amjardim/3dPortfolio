@@ -49,11 +49,39 @@ export class CanvasComponent implements OnInit, OnDestroy {
     directionalLight.position.set(5, 10, 7.5);
     this.scene.add(directionalLight);
 
-    const loader = new GLTFLoader().setPath('assets/');
-    loader.load('old_computers.glb', async (glb) => {
+    const loader = new GLTFLoader().setPath('assets/models/');
+    loader.load('old_computers_cardboardbox3.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
       this.scene.add(model);
+
+      const monitors: THREE.Mesh[] = [];
+
+      this.scene.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.Material | THREE.Material[];
+
+          // Handle both single and multi-material meshes
+          const isMonitorMaterial =
+            Array.isArray(mat)
+              ? mat.some((m) => (m as any).userData?.isMonitor)
+              : (mat as any).userData?.isMonitor;
+
+          // Check both mesh and material userData
+          if (child.userData?.['isMonitor'] || isMonitorMaterial) {
+            monitors.push(child);
+          }
+        }
+      });
+
+      console.log('Detected monitor meshes:', monitors);
+
+      // monitors.forEach((monitor) => {
+      //   this.applyVideoTexture(monitor, 'assets/videos/screen-demo.mp4');
+      //   // or this.applyImageTexture(...)
+      //   // or this.applyTextTexture(...)
+      // });
+
       this.render();
       });
 
