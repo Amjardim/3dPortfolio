@@ -49,8 +49,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
     directionalLight.position.set(5, 10, 7.5);
     this.scene.add(directionalLight);
 
-    const loader = new GLTFLoader().setPath('assets/models/');
-    loader.load('old_computers_cardboardbox3.glb', async (glb) => {
+    const loader = new GLTFLoader();
+    loader.load('https://localhost:7211/models/old_computers_cardboardbox.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
       this.scene.add(model);
