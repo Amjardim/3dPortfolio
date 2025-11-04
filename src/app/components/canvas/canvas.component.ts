@@ -95,7 +95,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
         this.applyImageTexture(monitors[2], 'assets/images/profilepic2.jpg').catch(console.error);
       }
       if (monitors.length > 3 && monitors[3]) {
-        this.applyImageTexture(monitors[3], 'assets/images/profilepicmini.jpg').catch(console.error);
+        this.applyVideoTexture(monitors[3], 'assets/videos/Ronaldinho.mp4');
       }
       if (monitors.length > 4 && monitors[4]) {
         this.applyTextTexture(monitors[4], 'Experienced Senior Software Developer & Agile Team Lead with over 4 years of hands-on expertise in full-stack development, team leadership, and Agile project management. Proven track record of designing, deploying, and optimizing scalable applications while mentoring developers and collaborating with stakeholders to deliver high-impact solutions.', { fontSize: 56, fontColor: '#00ff00', bgColor: '#000000', fontFamily: 'Courier New, monospace' });
@@ -105,6 +105,13 @@ export class CanvasComponent implements OnInit, OnDestroy {
       }
       if (monitors.length > 6 && monitors[6]) {
         this.applyTextTexture(monitors[6], 'Previously taught Computer Science to children, blending technical skills with mentorship—a background that strengthens my ability to communicate complex concepts clearly. Holds a Bachelor\'s in Computer Science from PUC-Rio, with fluency in English and Portuguese.', { fontSize: 56, fontColor: '#00ff00', bgColor: '#000000', fontFamily: 'Courier New, monospace' });
+      }
+      if (monitors.length > 7 && monitors[7]) {
+        this.applyVideoTexture(monitors[7], 'assets/videos/Teamwork.mp4');
+      }
+
+      if (monitors.length > 8 && monitors[8]) {
+        this.applyVideoTexture(monitors[8], 'assets/videos/LOTR.mp4');
       }
 
       this.render();
@@ -205,13 +212,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
   private onKeyUp = (event: KeyboardEvent) => {
     this.keyState[event.code] = false;
-    if (event.code === 'KeyC' && this.camera) {
-      // Quick dump to console for copy/paste
-      const p = this.camera.position;
-      const r = this.camera.rotation;
-      console.log('Camera position:', { x: p.x, y: p.y, z: p.z });
-      console.log('Camera rotation (radians):', { x: r.x, y: r.y, z: r.z });
-    }
   };
 
   /**
