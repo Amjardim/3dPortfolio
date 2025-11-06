@@ -30,6 +30,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private sceneBounds?: { min: THREE.Vector3; max: THREE.Vector3 }; // Scene bounding box
   private maxRollAngle: number = Math.PI / 12; // Maximum roll angle (15 degrees)
   private monitors: THREE.Mesh[] = []; // Store monitor meshes for interaction
+  private monitorLights: THREE.SpotLight[] = []; // Store spot lights for monitors
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
   private mouse: THREE.Vector2 = new THREE.Vector2();
   private hoveredMonitor: THREE.Mesh | null = null; // Currently hovered monitor
@@ -64,14 +65,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.renderer.toneMappingExposure = 1;
     container.appendChild(this.renderer.domElement);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    this.scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 10, 7.5);
-    this.scene.add(directionalLight);
 
     const loader = new GLTFLoader();
-    loader.load('https://localhost:7211/models/old_computers_cb.glb', async (glb) => {
+    loader.load('https://localhost:7211/models/old_computers_complete.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
       this.scene.add(model);
@@ -117,36 +113,43 @@ export class CanvasComponent implements OnInit, OnDestroy {
         }
       });
 
-      console.log('Detected monitor meshes:', this.monitors);
-
       //Apply different content to monitors
       if (this.monitors.length > 0 && this.monitors[0]) {
         this.applyVideoTexture(this.monitors[0], 'assets/videos/Pingpong.mp4');
+        this.addMonitorLight(this.monitors[0], 0.7, 0.85, 1.0); // Slight blue tint
       }
       if (this.monitors.length > 1 && this.monitors[1]) {
         this.applyVideoTexture(this.monitors[1], 'assets/videos/NeoVSMerovingian.mp4');
+        this.addMonitorLight(this.monitors[1], 1.0, 0.95, 0.8); // Slight yellow tint
       }
       if (this.monitors.length > 2 && this.monitors[2]) {
-        this.applyImageTexture(this.monitors[2], 'assets/images/profilepic2.jpg').catch(console.error);
+        this.applyImageTexture(this.monitors[2], 'assets/images/QRCode.png').catch(console.error);
+        this.addMonitorLight(this.monitors[2], 0.8, 0.9, 1.0);
       }
       if (this.monitors.length > 3 && this.monitors[3]) {
-        this.applyVideoTexture(this.monitors[3], 'assets/videos/Ronaldinho.mp4');
+        this.applyVideoTexture(this.monitors[3], 'assets/videos/RonaldinhoMagic.mp4');
+        this.addMonitorLight(this.monitors[3], 0.75, 1.0, 0.85); // Slight green tint
       }
       if (this.monitors.length > 4 && this.monitors[4]) {
-        this.applyTextTexture(this.monitors[4], 'Experienced Senior Software Developer & Agile Team Lead with over 4 years of hands-on expertise in full-stack development, team leadership, and Agile project management. Proven track record of designing, deploying, and optimizing scalable applications while mentoring developers and collaborating with stakeholders to deliver high-impact solutions.', { fontSize: 56, fontColor: '#00ff00', bgColor: '#000000', fontFamily: 'Courier New, monospace' });
+        this.applyVideoTexture(this.monitors[4], 'assets/videos/ColoredStatic.mp4');
+        this.addMonitorLight(this.monitors[4], 1.0, 0.8, 0.9); // Slight pink tint
       }
       if (this.monitors.length > 5 && this.monitors[5]) {
-        this.applyTextTexture(this.monitors[5], 'Began career in frontend and backend development (JavaScript, C#) before advancing to technical leadership, where I guided cross-functional teams in Agile environments as both a Scrum Master and Senior Developer. Passionate about clean architecture, performance optimization, and fostering collaborative engineering cultures.', { fontSize: 56, fontColor: '#00ff00', bgColor: '#000000', fontFamily: 'Courier New, monospace' });
+        this.applyImageTexture(this.monitors[5], "assets/images/DontPress.png");
+        this.addMonitorLight(this.monitors[5], 1.0, 0.8, 0.8); // Slight red tint
       }
       if (this.monitors.length > 6 && this.monitors[6]) {
-        this.applyTextTexture(this.monitors[6], 'Previously taught Computer Science to children, blending technical skills with mentorship—a background that strengthens my ability to communicate complex concepts clearly. Holds a Bachelor\'s in Computer Science from PUC-Rio, with fluency in English and Portuguese.', { fontSize: 56, fontColor: '#00ff00', bgColor: '#000000', fontFamily: 'Courier New, monospace' });
+        this.applyTextTexture(this.monitors[6], 'MUSIC PLAYER', { fontSize: 120, fontColor: '#ffffff', bgColor: '#000000', fontFamily: 'Arial', fontWeight: 'bold' });
+        this.addMonitorLight(this.monitors[6], 0.8, 0.9, 1.0);
       }
       if (this.monitors.length > 7 && this.monitors[7]) {
-        this.applyVideoTexture(this.monitors[7], 'assets/videos/Teamwork.mp4');
+        this.applyVideoTexture(this.monitors[7], 'assets/videos/Static.mp4');
+        this.addMonitorLight(this.monitors[7], 0.8, 0.9, 1.0);
       }
 
       if (this.monitors.length > 8 && this.monitors[8]) {
-        this.applyVideoTexture(this.monitors[8], 'assets/videos/LOTR.mp4');
+        this.applyVideoTexture(this.monitors[8], 'assets/videos/Teamwork.mp4');
+        this.addMonitorLight(this.monitors[8], 0.8, 0.9, 1.0);
       }
 
       // Setup mouse interaction for monitors
@@ -586,7 +589,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
     texture.offset.set(0, 0); // No offset
 
-    this.applyTextureToMonitor(monitor, texture, 2.0); // 2.0 is emissive intensity
+    this.applyTextureToMonitor(monitor, texture, 1.0, true); // Reduced emissive intensity for videos, isVideo flag
   }
 
   /**
@@ -628,6 +631,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       bgColor?: string;
       fontFamily?: string;
       padding?: number;
+      fontWeight?: string;
     } = {}
   ): void {
     const {
@@ -635,7 +639,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
       fontColor = '#ffffff',
       bgColor = '#000000',
       fontFamily = 'Arial',
-      padding = 20
+      padding = 20,
+      fontWeight = 'normal'
     } = options;
 
     const canvas = document.createElement('canvas');
@@ -645,25 +650,22 @@ export class CanvasComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Set canvas size (taller for more vertical text display)
+    // Set canvas size (square for short text phrases)
     canvas.width = 2048;
-    canvas.height = 3072; // Taller canvas for longer vertical text
+    canvas.height = 2048;
 
     // Fill background
     context.fillStyle = bgColor;
     context.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Configure text with Matrix-style monospace font
-    context.font = `${fontSize}px ${fontFamily}`;
+    // Configure text with bold white text
+    context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
     context.fillStyle = fontColor;
     context.textAlign = 'center'; // Center horizontally
     context.textBaseline = 'middle'; // Center vertically
 
-    // Add Matrix-style glow effect (subtle shadow for digital look)
-    context.shadowColor = fontColor;
-    context.shadowBlur = 10;
-    context.shadowOffsetX = 0;
-    context.shadowOffsetY = 0;
+    // Remove glow effect for clean white text
+    context.shadowBlur = 0;
 
     // Word wrap function for long text
     const maxWidth = canvas.width - (padding * 2);
@@ -696,12 +698,12 @@ export class CanvasComponent implements OnInit, OnDestroy {
     });
 
     // Draw wrapped text centered both horizontally and vertically
-    const lineHeight = fontSize * 2.0; // Increased line spacing for longer vertical appearance
+    const lineHeight = fontSize * 1.2; // Tighter line spacing for short phrases
     const totalHeight = finalLines.length * lineHeight;
     const startY = (canvas.height - totalHeight) / 2 + lineHeight / 2; // Center with line height offset
 
     finalLines.forEach((line, index) => {
-      // Center each line horizontally with glow effect
+      // Center each line horizontally
       context.fillText(line, canvas.width / 2, startY + index * lineHeight);
     });
 
@@ -765,7 +767,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
    * Applies a texture to a monitor mesh with emissive material
    * IMPORTANT: Clones materials to ensure each monitor has its own unique material instance
    */
-  private applyTextureToMonitor(monitor: THREE.Mesh, texture: THREE.Texture, emissiveIntensity: number = 1.5): void {
+  private applyTextureToMonitor(monitor: THREE.Mesh, texture: THREE.Texture, emissiveIntensity: number = 1.5, isVideo: boolean = false): void {
     const originalMaterial = monitor.material as THREE.Material | THREE.Material[];
 
     if (Array.isArray(originalMaterial)) {
@@ -774,12 +776,12 @@ export class CanvasComponent implements OnInit, OnDestroy {
         if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
           // Clone the material to avoid sharing between monitors
           const clonedMat = mat.clone();
-          this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity);
+          this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
           return clonedMat;
         } else {
           // Convert to MeshStandardMaterial
           const newMat = new THREE.MeshStandardMaterial();
-          this.configureEmissiveMaterial(newMat, texture, emissiveIntensity);
+          this.configureEmissiveMaterial(newMat, texture, emissiveIntensity, isVideo);
           return newMat;
         }
       });
@@ -789,12 +791,12 @@ export class CanvasComponent implements OnInit, OnDestroy {
       if (originalMaterial instanceof THREE.MeshStandardMaterial || originalMaterial instanceof THREE.MeshPhysicalMaterial) {
         // Clone the material so each monitor has its own instance
         const clonedMat = originalMaterial.clone();
-        this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity);
+        this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
         monitor.material = clonedMat;
       } else {
         // Convert to MeshStandardMaterial
         const newMat = new THREE.MeshStandardMaterial();
-        this.configureEmissiveMaterial(newMat, texture, emissiveIntensity);
+        this.configureEmissiveMaterial(newMat, texture, emissiveIntensity, isVideo);
         monitor.material = newMat;
       }
     }
@@ -814,20 +816,72 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private configureEmissiveMaterial(
     material: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial,
     texture: THREE.Texture,
-    emissiveIntensity: number
+    emissiveIntensity: number,
+    isVideo: boolean = false
   ): void {
     material.map = texture;
     material.emissive = new THREE.Color(0xffffff);
     material.emissiveMap = texture;
     material.emissiveIntensity = emissiveIntensity;
 
-    // Make the material more emissive (self-illuminating)
-    material.toneMapped = false; // Prevent tone mapping from dimming the emissive glow
+    // For videos, enable tone mapping to reduce brightness
+    // For other content (text/images), disable tone mapping for better glow
+    material.toneMapped = isVideo;
+
+    // Reduce reflections by making the material completely matte (non-reflective)
+    // This prevents other monitor lights from reflecting on the screen and blocking content
+    material.roughness = 1.0; // Maximum roughness = completely matte, no gloss
+    material.metalness = 0.0; // No metallic properties = no reflections
 
     // Increase emissive properties for better screen glow effect
     if (material instanceof THREE.MeshStandardMaterial) {
       material.needsUpdate = true;
     }
+  }
+
+  /**
+   * Adds a spot light positioned at the monitor screen to illuminate the scene outward
+   */
+  private addMonitorLight(monitor: THREE.Mesh, r: number, g: number, b: number, intensity: number = 1, distance: number = 10): void {
+    // Update monitor's world matrix to get accurate position
+    monitor.updateMatrixWorld(true);
+
+    // Calculate monitor's bounding box in world space
+    const box = new THREE.Box3().setFromObject(monitor);
+    const monitorCenter = box.getCenter(new THREE.Vector3());
+
+    // Get monitor's world matrix to extract its orientation
+    const monitorWorldMatrix = new THREE.Matrix4();
+    monitorWorldMatrix.copy(monitor.matrixWorld);
+
+    // Extract the monitor's local Z-axis direction in world space (screen normal)
+    const worldZ = new THREE.Vector3();
+    worldZ.setFromMatrixColumn(monitorWorldMatrix, 2);
+    worldZ.normalize();
+
+    // Position light at monitor center, but further behind the screen to avoid blocking content
+    const lightOffsetBack = -0.5; // Increased offset behind the screen to prevent visibility
+    const lightPosition = monitorCenter.clone().add(worldZ.clone().multiplyScalar(lightOffsetBack));
+
+    // Calculate target position (light shines away from monitor in the direction it faces)
+    const targetPosition = monitorCenter.clone().add(worldZ.clone().multiplyScalar(2.0));
+
+    // Create spot light with the specified color
+    // SpotLight shines in a cone from position toward target
+    // Increased cone angle (Math.PI / 2 = 90 degrees), decreased decay (0.5), increased default intensity (4.0)
+    const light = new THREE.SpotLight(new THREE.Color(r, g, b), intensity, distance, Math.PI / 2, 1, 0.5);
+    light.position.copy(lightPosition);
+    light.target.position.copy(targetPosition);
+
+    // Update target matrix to ensure it's properly oriented
+    light.target.updateMatrixWorld();
+
+    // Add target to scene (required for SpotLight)
+    this.scene.add(light.target);
+
+    // Add light to scene
+    this.scene.add(light);
+    this.monitorLights.push(light);
   }
 
   ngOnDestroy(): void {
@@ -840,6 +894,15 @@ export class CanvasComponent implements OnInit, OnDestroy {
       video.load();
     });
     this.videoElements = [];
+
+    // Clean up monitor lights
+    this.monitorLights.forEach((light) => {
+      // Remove target from scene (SpotLight has a target object)
+      this.scene.remove(light.target);
+      this.scene.remove(light);
+      light.dispose();
+    });
+    this.monitorLights = [];
 
     // Clean up monitor highlights
     this.monitors.forEach((monitor) => {
