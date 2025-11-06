@@ -37,6 +37,15 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private focusedMonitor: THREE.Mesh | null = null; // Currently focused monitor (camera looking at it)
   private previousCameraState?: { position: THREE.Vector3; quaternion: THREE.Quaternion }; // Store previous camera state
   private isTransitioning: boolean = false; // Track if camera is transitioning
+  // Music player properties
+  private musicPlayerMonitor?: THREE.Mesh; // Reference to the music player monitor
+  private musicPlayerCanvas?: HTMLCanvasElement; // Canvas for music player UI
+  private musicPlayerTexture?: THREE.CanvasTexture; // Texture for music player
+  private audioElement?: HTMLAudioElement; // Audio element for playing music
+  private musicFiles: string[] = []; // List of music file paths
+  private currentSongIndex: number = 0; // Current song index
+  private isPlaying: boolean = false; // Play/pause state
+  private buttonRegions: { name: string; x: number; y: number; width: number; height: number }[] = []; // Button click regions
 
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
@@ -139,7 +148,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
         this.addMonitorLight(this.monitors[5], 1.0, 0.8, 0.8); // Slight red tint
       }
       if (this.monitors.length > 6 && this.monitors[6]) {
-        this.applyTextTexture(this.monitors[6], 'MUSIC PLAYER', { fontSize: 120, fontColor: '#ffffff', bgColor: '#000000', fontFamily: 'Arial', fontWeight: 'bold' });
+        this.musicPlayerMonitor = this.monitors[6];
+        this.initializeMusicPlayer();
         this.addMonitorLight(this.monitors[6], 0.8, 0.9, 1.0);
       }
       if (this.monitors.length > 7 && this.monitors[7]) {
@@ -244,8 +254,26 @@ export class CanvasComponent implements OnInit, OnDestroy {
     // Check for intersections with monitors
     const intersects = this.raycaster.intersectObjects(this.monitors, true);
 
+    // If clicking outside monitors and focused on music player, return to previous position
+    if (intersects.length === 0 && this.focusedMonitor === this.musicPlayerMonitor) {
+      this.returnToPreviousPosition();
+      return;
+    }
+
     if (intersects.length > 0) {
       const clickedMonitor = intersects[0].object as THREE.Mesh;
+      const intersection = intersects[0];
+
+      // Check if this is the music player monitor and we're focused on it
+      if (clickedMonitor === this.musicPlayerMonitor && this.focusedMonitor === this.musicPlayerMonitor) {
+        // Get UV coordinates from intersection (try uv first, then uv2)
+        const uvCoords = (intersection as any).uv || (intersection as any).uv2;
+        if (uvCoords) {
+          const uv = { x: uvCoords.x, y: uvCoords.y };
+          this.handleMusicPlayerClick(uv);
+        }
+        return; // Don't move camera when clicking buttons
+      }
 
       if (this.focusedMonitor === clickedMonitor) {
         // Clicking the same monitor again - return to previous position
@@ -884,8 +912,253 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.monitorLights.push(light);
   }
 
+  /**
+   * Initialize the music player
+   */
+  private initializeMusicPlayer(): void {
+    // Load music files
+    this.musicFiles = [
+      'assets/music/Deftones - My Own Summer.mp3',
+      'assets/music/Ghost.mp3',
+      'assets/music/Logos.mp3',
+      'assets/music/Profissional.mp3',
+      'assets/music/Spybreak!.mp3'
+    ];
+
+    // Create audio element
+    this.audioElement = new Audio();
+    this.audioElement.addEventListener('ended', () => {
+      this.nextSong();
+    });
+
+    // Create canvas for music player UI
+    this.musicPlayerCanvas = document.createElement('canvas');
+    this.musicPlayerCanvas.width = 2048;
+    this.musicPlayerCanvas.height = 2048;
+
+    // Draw initial UI
+    this.drawMusicPlayer();
+
+    // Create texture from canvas
+    this.musicPlayerTexture = new THREE.CanvasTexture(this.musicPlayerCanvas);
+    this.musicPlayerTexture.minFilter = THREE.LinearFilter;
+    this.musicPlayerTexture.magFilter = THREE.LinearFilter;
+    this.musicPlayerTexture.wrapS = THREE.ClampToEdgeWrapping;
+    this.musicPlayerTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    // Apply texture to monitor
+    if (this.musicPlayerMonitor) {
+      this.applyTextureToMonitor(this.musicPlayerMonitor, this.musicPlayerTexture, 1.8);
+    }
+  }
+
+  /**
+   * Draw the music player UI with buttons
+   */
+  private drawMusicPlayer(): void {
+    if (!this.musicPlayerCanvas) return;
+
+    const ctx = this.musicPlayerCanvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = this.musicPlayerCanvas.width;
+    const height = this.musicPlayerCanvas.height;
+
+    // Clear canvas with dark blue background
+    ctx.fillStyle = '#1a1a3e';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw current song name (larger title)
+    const currentSong = this.musicFiles[this.currentSongIndex] || 'No song';
+    const songName = currentSong.split('/').pop()?.replace('.mp3', '') || 'Unknown';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 140px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(songName, width / 2, height * 0.3);
+
+    // Button dimensions (larger buttons)
+    const buttonSize = 280;
+    const buttonY = height / 2;
+    const centerX = width / 2;
+    const spacing = 400;
+
+    // Clear button regions
+    this.buttonRegions = [];
+
+    // Previous button (left)
+    const prevX = centerX - spacing - buttonSize / 2;
+    this.drawButton(ctx, prevX, buttonY, buttonSize, '◄◄', '#4a90e2');
+    this.buttonRegions.push({
+      name: 'previous',
+      x: prevX - buttonSize / 2,
+      y: buttonY - buttonSize / 2,
+      width: buttonSize,
+      height: buttonSize
+    });
+
+    // Play/Pause button (center)
+    const playX = centerX;
+    const playIcon = this.isPlaying ? '⏸' : '▶';
+    this.drawButton(ctx, playX, buttonY, buttonSize, playIcon, '#2ecc71');
+    this.buttonRegions.push({
+      name: 'playpause',
+      x: playX - buttonSize / 2,
+      y: buttonY - buttonSize / 2,
+      width: buttonSize,
+      height: buttonSize
+    });
+
+    // Next button (right)
+    const nextX = centerX + spacing + buttonSize / 2;
+    this.drawButton(ctx, nextX, buttonY, buttonSize, '►►', '#4a90e2');
+    this.buttonRegions.push({
+      name: 'next',
+      x: nextX - buttonSize / 2,
+      y: buttonY - buttonSize / 2,
+      width: buttonSize,
+      height: buttonSize
+    });
+
+    // Update texture
+    if (this.musicPlayerTexture) {
+      this.musicPlayerTexture.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Draw a button on the canvas
+   */
+  private drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, icon: string, color: string): void {
+    // Draw button background
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw button border
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    // Draw icon
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${size * 0.5}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(icon, x, y);
+  }
+
+  /**
+   * Handle click on music player buttons
+   */
+  private handleMusicPlayerClick(uv: { x: number; y: number }): void {
+    if (!this.musicPlayerCanvas) return;
+
+    // Convert UV coordinates to canvas coordinates
+    const canvasX = uv.x * this.musicPlayerCanvas.width;
+    const canvasY = (1 - uv.y) * this.musicPlayerCanvas.height; // Flip Y coordinate
+
+    // Check which button was clicked
+    for (const button of this.buttonRegions) {
+      if (
+        canvasX >= button.x &&
+        canvasX <= button.x + button.width &&
+        canvasY >= button.y &&
+        canvasY <= button.y + button.height
+      ) {
+        switch (button.name) {
+          case 'playpause':
+            this.playPause();
+            break;
+          case 'next':
+            this.nextSong();
+            break;
+          case 'previous':
+            this.previousSong();
+            break;
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Toggle play/pause
+   */
+  private playPause(): void {
+    if (!this.audioElement) return;
+
+    if (this.isPlaying) {
+      this.audioElement.pause();
+      this.isPlaying = false;
+    } else {
+      if (!this.audioElement.src || this.audioElement.src.endsWith('undefined')) {
+        this.loadCurrentSong();
+      }
+      this.audioElement.play().catch((err) => {
+        console.warn('Audio play failed:', err);
+      });
+      this.isPlaying = true;
+    }
+    this.drawMusicPlayer();
+  }
+
+  /**
+   * Play next song
+   */
+  private nextSong(): void {
+    this.currentSongIndex = (this.currentSongIndex + 1) % this.musicFiles.length;
+    this.loadCurrentSong();
+    if (this.isPlaying) {
+      this.audioElement?.play().catch((err) => {
+        console.warn('Audio play failed:', err);
+      });
+    }
+    this.drawMusicPlayer();
+  }
+
+  /**
+   * Play previous song
+   */
+  private previousSong(): void {
+    this.currentSongIndex = (this.currentSongIndex - 1 + this.musicFiles.length) % this.musicFiles.length;
+    this.loadCurrentSong();
+    if (this.isPlaying) {
+      this.audioElement?.play().catch((err) => {
+        console.warn('Audio play failed:', err);
+      });
+    }
+    this.drawMusicPlayer();
+  }
+
+  /**
+   * Load the current song
+   */
+  private loadCurrentSong(): void {
+    if (!this.audioElement || this.musicFiles.length === 0) return;
+
+    const songPath = this.musicFiles[this.currentSongIndex];
+    this.audioElement.src = songPath;
+    this.audioElement.load();
+  }
+
   ngOnDestroy(): void {
     if (!isPlatformBrowser(this.platformId)) return;
+
+    // Clean up audio element
+    if (this.audioElement) {
+      this.audioElement.pause();
+      this.audioElement.src = '';
+      this.audioElement.load();
+      this.audioElement = undefined;
+    }
+
+    // Clean up music player texture
+    if (this.musicPlayerTexture) {
+      this.musicPlayerTexture.dispose();
+      this.musicPlayerTexture = undefined;
+    }
 
     // Clean up video elements
     this.videoElements.forEach((video) => {
