@@ -31,12 +31,22 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private maxRollAngle: number = Math.PI / 12; // Maximum roll angle (15 degrees)
   private monitors: THREE.Mesh[] = []; // Store monitor meshes for interaction
   private monitorLights: THREE.SpotLight[] = []; // Store spot lights for monitors
+  private highlightTargets: THREE.Mesh[] = []; // Store meshes that should highlight on hover
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
   private mouse: THREE.Vector2 = new THREE.Vector2();
-  private hoveredMonitor: THREE.Mesh | null = null; // Currently hovered monitor
+  private hoveredObject: THREE.Mesh | null = null; // Currently hovered interactive mesh
   private focusedMonitor: THREE.Mesh | null = null; // Currently focused monitor (camera looking at it)
+  private focusedClipboard: THREE.Mesh | null = null; // Currently focused clipboard (camera looking at it)
   private previousCameraState?: { position: THREE.Vector3; quaternion: THREE.Quaternion }; // Store previous camera state
   private isTransitioning: boolean = false; // Track if camera is transitioning
+  private clipboardPageMesh?: THREE.Mesh; // Reference to clipboard page mesh
+  private clipboardInteractiveMesh?: THREE.Mesh; // Reference to clipboard board mesh used for interaction/highlight
+  private clipboardMeshGroup: THREE.Mesh[] = []; // All clipboard-related meshes for interaction
+  private clipboardPageUp?: THREE.Vector3; // Cached page up direction derived from UVs
+  private clipboardTextContent: string = `Project Notes
+- Polish 3D workspace
+- Refine monitor interactions
+- Record portfolio walkthrough`;
   // Music player properties
   private musicPlayerMonitor?: THREE.Mesh; // Reference to the music player monitor
   private musicPlayerCanvas?: HTMLCanvasElement; // Canvas for music player UI
@@ -100,6 +110,14 @@ export class CanvasComponent implements OnInit, OnDestroy {
       this.camera.rotation.z = 0;
 
       this.monitors = [];
+      this.highlightTargets = [];
+      this.clipboardMeshGroup = [];
+      this.clipboardPageMesh = undefined;
+      this.clipboardInteractiveMesh = undefined;
+      this.clipboardPageUp = undefined;
+
+      const highlightObjectNames = new Set(['ButtonButton']);
+      const foundHighlightNames = new Set<string>();
 
       this.scene.traverse((child) => {
         if (child instanceof THREE.Mesh) {
@@ -114,11 +132,69 @@ export class CanvasComponent implements OnInit, OnDestroy {
           // Check both mesh and material userData
           if (child.userData?.['isMonitor'] || isMonitorMaterial) {
             this.monitors.push(child);
+            if (!this.highlightTargets.includes(child)) {
+              this.highlightTargets.push(child);
+            }
             // Make monitors clickable by storing original material references
             if (!child.userData['originalMaterial']) {
               child.userData['originalMaterial'] = child.material;
             }
           }
+
+          if (highlightObjectNames.has(child.name)) {
+            if (!this.highlightTargets.includes(child)) {
+              this.highlightTargets.push(child);
+            }
+            foundHighlightNames.add(child.name);
+          }
+
+          if (child.name === 'page_page_0') {
+            this.clipboardPageMesh = child;
+            child.updateMatrixWorld(true);
+            this.clipboardPageUp = this.computeMeshTextureUp(child) ?? undefined;
+
+            const meshAncestors: THREE.Mesh[] = [];
+            let ancestor: THREE.Object3D | null = child.parent ?? null;
+            while (ancestor) {
+              if (ancestor instanceof THREE.Mesh) {
+                meshAncestors.push(ancestor);
+              }
+              ancestor = ancestor.parent ?? null;
+            }
+
+            const namePattern = /(clip|board)/i;
+            const namedAncestor = meshAncestors.find((mesh) => namePattern.test(mesh.name));
+            const outermostMesh = meshAncestors.length > 0 ? meshAncestors[meshAncestors.length - 1] : undefined;
+            const interactive = namedAncestor ?? outermostMesh;
+
+            this.clipboardInteractiveMesh = interactive ?? child;
+
+            child.userData = {
+              ...child.userData,
+              isClipboard: true
+            };
+            this.clipboardInteractiveMesh.userData = {
+              ...this.clipboardInteractiveMesh.userData,
+              isClipboard: true
+            };
+
+            const interactionTargets = new Set<THREE.Mesh>();
+            interactionTargets.add(child);
+            if (this.clipboardInteractiveMesh) {
+              interactionTargets.add(this.clipboardInteractiveMesh);
+            }
+            this.clipboardMeshGroup = Array.from(interactionTargets);
+
+            if (!this.highlightTargets.includes(child)) {
+              this.highlightTargets.push(child);
+            }
+          }
+        }
+      });
+
+      highlightObjectNames.forEach((name) => {
+        if (!foundHighlightNames.has(name)) {
+          console.warn(`Highlight target not found: ${name}`);
         }
       });
 
@@ -162,6 +238,18 @@ export class CanvasComponent implements OnInit, OnDestroy {
         this.addMonitorLight(this.monitors[8], 0.8, 0.9, 1.0);
       }
 
+      if (this.clipboardPageMesh) {
+        this.applyTextTexture(this.clipboardPageMesh, this.clipboardTextContent, {
+          fontSize: 120,
+          fontColor: '#2f2b1d',
+          bgColor: '#f5f0e1',
+          fontFamily: 'Segoe UI',
+          fontWeight: '600',
+          padding: 240,
+          emissiveIntensity: 0.35
+        });
+      }
+
       // Setup mouse interaction for monitors
       this.setupMonitorInteraction();
 
@@ -196,7 +284,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
    * Handle mouse move to detect hover over monitors
    */
   private onMouseMove = (event: MouseEvent): void => {
-    if (this.isTransitioning || this.focusedMonitor) return; // Don't interact during transitions or when focused
+    if (this.isTransitioning || this.focusedMonitor || this.focusedClipboard) return; // Don't interact during transitions or when focused
 
     const container = this.renderer.domElement;
     const rect = container.getBoundingClientRect();
@@ -208,28 +296,29 @@ export class CanvasComponent implements OnInit, OnDestroy {
     // Update raycaster
     this.raycaster.setFromCamera(this.mouse, this.camera);
 
-    // Check for intersections with monitors
-    const intersects = this.raycaster.intersectObjects(this.monitors, true);
+    // Check for intersections with highlight targets (monitors, clipboard, and named objects)
+    const intersects = this.raycaster.intersectObjects(this.highlightTargets, true);
 
     if (intersects.length > 0) {
-      const intersectedMonitor = intersects[0].object as THREE.Mesh;
+      const intersectedObject = intersects[0].object as THREE.Mesh;
+      const highlightTarget = this.resolveHighlightTarget(intersectedObject);
 
-      if (this.hoveredMonitor !== intersectedMonitor) {
-        // Remove highlight from previous monitor
-        if (this.hoveredMonitor) {
-          this.removeMonitorHighlight(this.hoveredMonitor);
+      if (highlightTarget && this.hoveredObject !== highlightTarget) {
+        // Remove highlight from previous object
+        if (this.hoveredObject) {
+          this.removeMonitorHighlight(this.hoveredObject);
         }
 
-        // Add highlight to new monitor
-        this.hoveredMonitor = intersectedMonitor;
-        this.addMonitorHighlight(intersectedMonitor);
+        // Add highlight to new object
+        this.hoveredObject = highlightTarget;
+        this.addMonitorHighlight(highlightTarget);
         container.style.cursor = 'pointer';
       }
     } else {
-      // Remove highlight if not hovering over any monitor
-      if (this.hoveredMonitor) {
-        this.removeMonitorHighlight(this.hoveredMonitor);
-        this.hoveredMonitor = null;
+      // Remove highlight if not hovering over any object
+      if (this.hoveredObject) {
+        this.removeMonitorHighlight(this.hoveredObject);
+        this.hoveredObject = null;
         container.style.cursor = 'default';
       }
     }
@@ -251,21 +340,30 @@ export class CanvasComponent implements OnInit, OnDestroy {
     // Update raycaster
     this.raycaster.setFromCamera(this.mouse, this.camera);
 
-    // Check for intersections with monitors
-    const intersects = this.raycaster.intersectObjects(this.monitors, true);
+    // Check for intersections with interactive targets (monitors + clipboard)
+    const interactiveTargets: THREE.Object3D[] = [...this.monitors];
+    if (this.clipboardMeshGroup.length > 0) {
+      interactiveTargets.push(...this.clipboardMeshGroup);
+    } else if (this.clipboardInteractiveMesh) {
+      interactiveTargets.push(this.clipboardInteractiveMesh);
+    }
+    const intersects = this.raycaster.intersectObjects(interactiveTargets, true);
 
-    // If clicking outside monitors and focused on music player, return to previous position
-    if (intersects.length === 0 && this.focusedMonitor === this.musicPlayerMonitor) {
-      this.returnToPreviousPosition();
+    // If clicking outside interactive objects, exit focus states when applicable
+    if (intersects.length === 0) {
+      if (this.focusedMonitor === this.musicPlayerMonitor || this.focusedClipboard) {
+        this.returnToPreviousPosition();
+      }
       return;
     }
 
-    if (intersects.length > 0) {
-      const clickedMonitor = intersects[0].object as THREE.Mesh;
-      const intersection = intersects[0];
+    const intersection = intersects[0];
+    const clickedObject = intersection.object as THREE.Mesh;
 
+    const monitor = this.findAncestorMesh(clickedObject, this.monitors);
+    if (monitor) {
       // Check if this is the music player monitor and we're focused on it
-      if (clickedMonitor === this.musicPlayerMonitor && this.focusedMonitor === this.musicPlayerMonitor) {
+      if (monitor === this.musicPlayerMonitor && this.focusedMonitor === this.musicPlayerMonitor) {
         // Get UV coordinates from intersection (try uv first, then uv2)
         const uvCoords = (intersection as any).uv || (intersection as any).uv2;
         if (uvCoords) {
@@ -275,13 +373,37 @@ export class CanvasComponent implements OnInit, OnDestroy {
         return; // Don't move camera when clicking buttons
       }
 
-      if (this.focusedMonitor === clickedMonitor) {
+      if (this.focusedMonitor === monitor) {
         // Clicking the same monitor again - return to previous position
         this.returnToPreviousPosition();
-      } else {
-        // Clicking a new monitor - move camera to it
-        this.moveCameraToMonitor(clickedMonitor);
+        return;
       }
+
+      // Clicking a new monitor - move camera to it
+      this.moveCameraToMonitor(monitor);
+      return;
+    }
+
+    const clipboardCandidates: THREE.Mesh[] =
+      this.clipboardMeshGroup.length > 0
+        ? this.clipboardMeshGroup
+        : this.clipboardInteractiveMesh
+          ? [this.clipboardInteractiveMesh]
+          : [];
+
+    const clipboard = clipboardCandidates.length > 0
+      ? this.findAncestorMesh(clickedObject, clipboardCandidates)
+      : undefined;
+
+    if (clipboard) {
+      const targetClipboard = this.clipboardInteractiveMesh ?? clipboard;
+
+      if (this.focusedClipboard === targetClipboard) {
+        this.returnToPreviousPosition();
+        return;
+      }
+
+      this.moveCameraToClipboard(targetClipboard);
     }
   };
 
@@ -324,6 +446,122 @@ export class CanvasComponent implements OnInit, OnDestroy {
       (outline.material as THREE.Material).dispose();
       delete monitor.userData['outline'];
     }
+  }
+
+  /**
+   * Clear any active hover highlight and reset cursor state
+   */
+  private clearHoveredHighlight(): void {
+    if (this.hoveredObject) {
+      this.removeMonitorHighlight(this.hoveredObject);
+      this.hoveredObject = null;
+      if (this.renderer?.domElement) {
+        this.renderer.domElement.style.cursor = 'default';
+      }
+    }
+  }
+
+  /**
+   * Compute the "up" direction for a textured plane based on its UV mapping
+   */
+  private computeMeshTextureUp(mesh: THREE.Mesh): THREE.Vector3 | null {
+    const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+    if (!geometry) return null;
+
+    const uvAttribute = geometry.attributes['uv'] as THREE.BufferAttribute | undefined;
+    const positionAttribute = geometry.attributes['position'] as THREE.BufferAttribute | undefined;
+    if (!uvAttribute || !positionAttribute) return null;
+
+    const epsilon = 1e-4;
+    let maxV = -Infinity;
+    let minV = Infinity;
+    const topVertices: THREE.Vector3[] = [];
+    const bottomVertices: THREE.Vector3[] = [];
+
+    for (let i = 0; i < uvAttribute.count; i++) {
+      const v = uvAttribute.getY(i);
+      if (v > maxV - epsilon) {
+        if (v > maxV + epsilon) {
+          topVertices.length = 0;
+          maxV = v;
+        }
+        topVertices.push(
+          new THREE.Vector3(
+            positionAttribute.getX(i),
+            positionAttribute.getY(i),
+            positionAttribute.getZ(i)
+          )
+        );
+      }
+
+      if (v < minV + epsilon) {
+        if (v < minV - epsilon) {
+          bottomVertices.length = 0;
+          minV = v;
+        }
+        bottomVertices.push(
+          new THREE.Vector3(
+            positionAttribute.getX(i),
+            positionAttribute.getY(i),
+            positionAttribute.getZ(i)
+          )
+        );
+      }
+    }
+
+    if (topVertices.length === 0 || bottomVertices.length === 0) {
+      return null;
+    }
+
+    const topCenter = topVertices.reduce((acc, v) => acc.add(v), new THREE.Vector3()).divideScalar(topVertices.length);
+    const bottomCenter = bottomVertices.reduce((acc, v) => acc.add(v), new THREE.Vector3()).divideScalar(bottomVertices.length);
+
+    const topWorld = topCenter.clone().applyMatrix4(mesh.matrixWorld);
+    const bottomWorld = bottomCenter.clone().applyMatrix4(mesh.matrixWorld);
+    const direction = topWorld.sub(bottomWorld);
+
+    if (direction.lengthSq() < 1e-6) {
+      return null;
+    }
+
+    return direction.normalize();
+  }
+
+  /**
+   * Walk up hierarchy to find a mesh contained in provided candidates
+   */
+  private findAncestorMesh(object: THREE.Object3D, candidates: THREE.Mesh[]): THREE.Mesh | undefined {
+    let current: THREE.Object3D | null = object;
+    while (current) {
+      if (current instanceof THREE.Mesh && candidates.includes(current)) {
+        return current as THREE.Mesh;
+      }
+      current = current.parent ?? null;
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve which mesh should be highlighted for a given intersection
+   */
+  private resolveHighlightTarget(mesh: THREE.Mesh): THREE.Mesh | null {
+    const monitor = this.findAncestorMesh(mesh, this.monitors);
+    if (monitor) {
+      return monitor;
+    }
+
+    if (this.clipboardPageMesh) {
+      const candidates =
+        this.clipboardMeshGroup.length > 0
+          ? this.clipboardMeshGroup
+          : [this.clipboardPageMesh];
+      const clipboard = this.findAncestorMesh(mesh, candidates);
+      if (clipboard) {
+        return this.clipboardPageMesh;
+      }
+    }
+
+    return mesh;
   }
 
   /**
@@ -378,22 +616,118 @@ export class CanvasComponent implements OnInit, OnDestroy {
     const matrix = new THREE.Matrix4().lookAt(targetPosition, monitorCenter, up);
     const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(matrix);
 
-    // Debug logging
-    console.log('Moving camera to monitor:', {
-      monitorCenter,
-      targetPosition,
-      distance,
-      size,
-      screenNormal
-    });
-
+    this.focusedClipboard = null;
     this.focusedMonitor = monitor;
     this.isTransitioning = true;
+    this.clearHoveredHighlight();
 
     // Animate camera transition
     this.animateCameraToPosition(targetPosition, targetQuaternion, () => {
       this.isTransitioning = false;
       // Disable fly controls while focused on monitor
+      if (this.flyControls) {
+        this.flyControls.enabled = false;
+      }
+    });
+  }
+
+  /**
+   * Move camera above clipboard and orient downward
+   */
+  private moveCameraToClipboard(clipboard: THREE.Mesh): void {
+    if (this.isTransitioning) return;
+
+    this.previousCameraState = {
+      position: this.camera.position.clone(),
+      quaternion: this.camera.quaternion.clone()
+    };
+
+    clipboard.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(clipboard);
+    const size = box.getSize(new THREE.Vector3());
+    const clipboardCenter = box.getCenter(new THREE.Vector3());
+
+    const clipboardWorldMatrix = new THREE.Matrix4().copy(clipboard.matrixWorld);
+
+    const worldAxes = [0, 1, 2].map((index) => {
+      const axis = new THREE.Vector3().setFromMatrixColumn(clipboardWorldMatrix, index);
+      return axis.normalize();
+    });
+
+    const globalUp = new THREE.Vector3(0, 1, 0);
+
+    let surfaceNormal = worldAxes[0].clone();
+    let surfaceDot = -Infinity;
+
+    for (const axis of worldAxes) {
+      const dot = Math.abs(axis.dot(globalUp));
+      if (dot > surfaceDot) {
+        surfaceDot = dot;
+        surfaceNormal.copy(axis);
+      }
+    }
+
+    if (surfaceNormal.dot(globalUp) < 0) {
+      surfaceNormal.multiplyScalar(-1);
+    }
+
+    let pageUpAxis: THREE.Vector3 | null = null;
+    const pageMesh = this.clipboardPageMesh ?? clipboard;
+    pageMesh.updateMatrixWorld(true);
+    pageUpAxis = this.computeMeshTextureUp(pageMesh);
+    if (!pageUpAxis && this.clipboardPageUp) {
+      pageUpAxis = this.clipboardPageUp.clone();
+    }
+
+    if (!pageUpAxis) {
+      const remainingAxes = worldAxes.filter(
+        (axis) => Math.abs(axis.dot(surfaceNormal)) < 0.95
+      );
+      pageUpAxis = remainingAxes[0]?.clone() ?? new THREE.Vector3(0, 0, 1);
+    }
+    pageUpAxis.normalize();
+
+    let pageRight = new THREE.Vector3().crossVectors(pageUpAxis, surfaceNormal);
+    if (pageRight.lengthSq() < 1e-4) {
+      pageRight = new THREE.Vector3().crossVectors(surfaceNormal, pageUpAxis);
+    }
+    if (pageRight.lengthSq() < 1e-4) {
+      pageRight = new THREE.Vector3(1, 0, 0);
+    } else {
+      pageRight.normalize();
+    }
+
+    const lateralOffset = Math.max(size.x, size.z) * 0.4;
+    const verticalOffset = Math.max(size.x, size.y, size.z) * 1.4;
+
+    let targetPosition = clipboardCenter
+      .clone()
+      .add(surfaceNormal.clone().multiplyScalar(verticalOffset))
+      .add(pageUpAxis.clone().multiplyScalar(-lateralOffset));
+
+    let up = pageUpAxis.clone();
+    let matrix = new THREE.Matrix4().lookAt(targetPosition, clipboardCenter, up);
+    let targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(matrix);
+
+    // Detect if page appears upside down; if so, rotate camera around forward axis
+    const cameraForward = clipboardCenter.clone().sub(targetPosition).normalize();
+    const pageUpInCamera = pageUpAxis.clone().applyQuaternion(targetQuaternion.clone().invert());
+
+    if (pageUpInCamera.y < 0) {
+      const rollAdjustment = new THREE.Quaternion().setFromAxisAngle(cameraForward, Math.PI);
+      targetQuaternion.premultiply(rollAdjustment);
+      matrix = new THREE.Matrix4().makeRotationFromQuaternion(targetQuaternion);
+      const adjustedUp = new THREE.Vector3(0, 1, 0).applyQuaternion(targetQuaternion);
+      up.copy(adjustedUp);
+    }
+
+    this.focusedMonitor = null;
+    this.focusedClipboard = clipboard;
+    this.isTransitioning = true;
+    this.clearHoveredHighlight();
+
+    this.animateCameraToPosition(targetPosition, targetQuaternion, () => {
+      this.isTransitioning = false;
       if (this.flyControls) {
         this.flyControls.enabled = false;
       }
@@ -415,6 +749,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       () => {
         this.isTransitioning = false;
         this.focusedMonitor = null;
+        this.focusedClipboard = null;
         this.previousCameraState = undefined;
 
         // Re-enable fly controls
@@ -423,9 +758,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
         }
 
         // Remove any remaining highlights
-        if (this.hoveredMonitor) {
-          this.removeMonitorHighlight(this.hoveredMonitor);
-          this.hoveredMonitor = null;
+        if (this.hoveredObject) {
+          this.removeMonitorHighlight(this.hoveredObject);
+          this.hoveredObject = null;
         }
       }
     );
@@ -484,7 +819,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private startAnimationLoop(): void {
     const loop = () => {
       const delta = this.clock.getDelta();
-      if (this.flyControls && !this.isTransitioning && !this.focusedMonitor) {
+      if (this.flyControls && !this.isTransitioning && !this.focusedMonitor && !this.focusedClipboard) {
         this.flyControls.update(delta);
         // Lock camera height to fixed person height
         this.camera.position.y = this.fixedHeight;
@@ -493,7 +828,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
         // Clamp camera position to scene bounds
         this.constrainCameraToBounds();
       }
-      if (!this.isTransitioning && !this.focusedMonitor) {
+      if (!this.isTransitioning && !this.focusedMonitor && !this.focusedClipboard) {
         this.updateCameraFromKeys(delta);
       }
       this.render();
@@ -617,7 +952,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
     texture.offset.set(0, 0); // No offset
 
-    this.applyTextureToMonitor(monitor, texture, 1.0, true); // Reduced emissive intensity for videos, isVideo flag
+    this.applyTexture(monitor, texture, 1.0, true); // Reduced emissive intensity for videos, isVideo flag
   }
 
   /**
@@ -635,7 +970,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
           texture.wrapT = THREE.ClampToEdgeWrapping;
           texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
           texture.offset.set(0, 0); // No offset
-          this.applyTextureToMonitor(monitor, texture, 1.5);
+          this.applyTexture(monitor, texture, 1.5);
           resolve();
         },
         undefined,
@@ -648,10 +983,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Applies a text texture to a monitor mesh with emissive lighting
+   * Applies a text texture to a mesh with emissive lighting
    */
   private applyTextTexture(
-    monitor: THREE.Mesh,
+    mesh: THREE.Mesh,
     text: string,
     options: {
       fontSize?: number;
@@ -660,6 +995,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       fontFamily?: string;
       padding?: number;
       fontWeight?: string;
+      emissiveIntensity?: number;
     } = {}
   ): void {
     const {
@@ -668,7 +1004,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
       bgColor = '#000000',
       fontFamily = 'Arial',
       padding = 20,
-      fontWeight = 'normal'
+      fontWeight = 'normal',
+      emissiveIntensity = 1.8
     } = options;
 
     const canvas = document.createElement('canvas');
@@ -744,7 +1081,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
     texture.offset.set(0, 0); // No offset
 
-    this.applyTextureToMonitor(monitor, texture, 1.8);
+    this.applyTexture(mesh, texture, emissiveIntensity);
   }
 
   /**
@@ -792,17 +1129,17 @@ export class CanvasComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Applies a texture to a monitor mesh with emissive material
-   * IMPORTANT: Clones materials to ensure each monitor has its own unique material instance
+   * Applies a texture to a mesh with emissive material
+   * IMPORTANT: Clones materials to ensure each mesh has its own unique material instance
    */
-  private applyTextureToMonitor(monitor: THREE.Mesh, texture: THREE.Texture, emissiveIntensity: number = 1.5, isVideo: boolean = false): void {
-    const originalMaterial = monitor.material as THREE.Material | THREE.Material[];
+  private applyTexture(mesh: THREE.Mesh, texture: THREE.Texture, emissiveIntensity: number = 1.5, isVideo: boolean = false): void {
+    const originalMaterial = mesh.material as THREE.Material | THREE.Material[];
 
     if (Array.isArray(originalMaterial)) {
       // Handle multi-material meshes - clone each material
       const clonedMaterials = originalMaterial.map((mat) => {
         if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
-          // Clone the material to avoid sharing between monitors
+          // Clone the material to avoid sharing between meshs
           const clonedMat = mat.clone();
           this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
           return clonedMat;
@@ -813,28 +1150,28 @@ export class CanvasComponent implements OnInit, OnDestroy {
           return newMat;
         }
       });
-      monitor.material = clonedMaterials;
+      mesh.material = clonedMaterials;
     } else {
       // Handle single material - clone it to avoid sharing
       if (originalMaterial instanceof THREE.MeshStandardMaterial || originalMaterial instanceof THREE.MeshPhysicalMaterial) {
         // Clone the material so each monitor has its own instance
         const clonedMat = originalMaterial.clone();
         this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
-        monitor.material = clonedMat;
+        mesh.material = clonedMat;
       } else {
         // Convert to MeshStandardMaterial
         const newMat = new THREE.MeshStandardMaterial();
         this.configureEmissiveMaterial(newMat, texture, emissiveIntensity, isVideo);
-        monitor.material = newMat;
+        mesh.material = newMat;
       }
     }
 
     // Update UV mapping if needed (some models may need this)
-    if (monitor.geometry) {
-      monitor.geometry.computeBoundingBox();
+    if (mesh.geometry) {
+      mesh.geometry.computeBoundingBox();
 
       // Normalize UV coordinates if they're in a small range (fixes zoomed-in textures)
-      this.normalizeMonitorUVs(monitor);
+      this.normalizeMonitorUVs(mesh);
     }
   }
 
@@ -948,7 +1285,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     // Apply texture to monitor
     if (this.musicPlayerMonitor) {
-      this.applyTextureToMonitor(this.musicPlayerMonitor, this.musicPlayerTexture, 1.8);
+      this.applyTexture(this.musicPlayerMonitor, this.musicPlayerTexture, 1.8);
     }
   }
 
