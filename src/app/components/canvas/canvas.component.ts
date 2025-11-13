@@ -152,6 +152,22 @@ export class CanvasComponent implements OnInit, OnDestroy {
   // Resource cleanup
   private videoElements: HTMLVideoElement[] = [];
 
+  // ButtonButton state
+  private buttonButton?: THREE.Mesh;
+  private originalMonitorConfigs: MonitorConfig[] = [];
+  private monitorsAreOff = false;
+  private buttonClickEnabled = true;
+  private coloredStaticVideo?: HTMLVideoElement;
+
+  // LightBulb state
+  private lightBulb?: THREE.Object3D;
+  private lightBulbLight?: THREE.PointLight;
+  private lightBulbEmissiveMaterials: Array<{
+    material: THREE.Material;
+    originalIntensity: number;
+    originalColor: THREE.Color;
+  }> = [];
+
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
       this.init();
@@ -219,7 +235,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       this.clipboardInteractiveMesh = undefined;
       this.clipboardPageUp = undefined;
 
-      const highlightObjectNames = new Set(['Button']);
+      const highlightObjectNames = new Set(['ButtonButton']);
       const foundHighlightNames = new Set<string>();
 
       this.scene.traverse((child) => {
@@ -248,6 +264,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
               this.highlightTargets.push(child);
             }
             foundHighlightNames.add(child.name);
+            // Store ButtonButton reference
+            if (child.name === 'ButtonButton' || (child.name === 'Button' && !this.buttonButton)) {
+              this.buttonButton = child;
+            }
           }
 
           if (child.name === 'page_page_0') {
@@ -291,8 +311,23 @@ export class CanvasComponent implements OnInit, OnDestroy {
               this.highlightTargets.push(child);
             }
           }
+
         }
       });
+
+      // Search for LightBulb (can be any Object3D type, not just Mesh)
+      if (!this.lightBulb) {
+        this.scene.traverse((obj) => {
+          const name = obj.name.toLowerCase();
+          if (name.includes('lightbulb') || name.includes('light_bulb') || name.includes('light-bulb') || name === 'lightbulb') {
+            this.lightBulb = obj;
+            // Store all emissive materials in the LightBulb hierarchy
+            this.collectEmissiveMaterials(obj);
+            // Initially turn off the light bulb (should be off when monitors are on)
+            this.turnOffLightBulb();
+          }
+        });
+      }
 
       highlightObjectNames.forEach((name) => {
         if (!foundHighlightNames.has(name)) {
@@ -312,6 +347,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
         { index: 7, type: 'video', path: 'assets/videos/Static.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
         { index: 8, type: 'video', path: 'assets/videos/Teamwork.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } }
       ];
+
+      // Store original monitor configs for restoration
+      this.originalMonitorConfigs = monitorConfigs.map(config => ({ ...config }));
 
       this.setupMonitors(monitorConfigs);
 
@@ -435,6 +473,15 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     // Update raycaster
     this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    // Check for ButtonButton clicks first
+    if (this.buttonButton) {
+      const buttonIntersects = this.raycaster.intersectObject(this.buttonButton, true);
+      if (buttonIntersects.length > 0) {
+        this.handleButtonButtonClick();
+        return;
+      }
+    }
 
     // Check for intersections with interactive targets (monitors + clipboard)
     const interactiveTargets: THREE.Object3D[] = [...this.monitors];
@@ -969,11 +1016,11 @@ export class CanvasComponent implements OnInit, OnDestroy {
   /**
    * Applies a video texture to a monitor mesh with emissive lighting
    */
-  private applyVideoTexture(monitor: THREE.Mesh, videoPath: string): void {
+  private applyVideoTexture(monitor: THREE.Mesh, videoPath: string, loop: boolean = true): void {
     const video = document.createElement('video');
     video.src = videoPath;
     video.crossOrigin = 'anonymous';
-    video.loop = true;
+    video.loop = loop;
     video.muted = true;
     video.play().catch((err) => {
       console.warn('Video autoplay failed:', err);
@@ -1500,6 +1547,233 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.audioElement.load();
   }
 
+  /**
+   * Turn all monitors off (black screen, no light)
+   */
+  private turnOffAllMonitors(): void {
+    // Create black texture
+    const canvas = document.createElement('canvas');
+    canvas.width = TEXTURE_CONFIG.CANVAS_SIZE;
+    canvas.height = TEXTURE_CONFIG.CANVAS_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    const blackTexture = new THREE.CanvasTexture(canvas);
+    this.configureTextureSettings(blackTexture);
+
+    // Apply black texture to all monitors with no emissive intensity
+    this.monitors.forEach((monitor) => {
+      this.applyTexture(monitor, blackTexture, 0, false);
+    });
+
+    // Turn off all monitor lights
+    this.monitorLights.forEach((light) => {
+      light.intensity = 0;
+    });
+
+    // Turn on light bulb
+    this.turnOnLightBulb();
+
+    this.monitorsAreOff = true;
+    this.buttonClickEnabled = true; // Re-enable button after monitors are off
+  }
+
+  /**
+   * Restore monitors to their original content
+   */
+  private restoreMonitors(): void {
+    // Restore monitor lights
+    this.monitorLights.forEach((light, index) => {
+      if (index < this.originalMonitorConfigs.length) {
+        const config = this.originalMonitorConfigs[index];
+        light.intensity = MONITOR_LIGHT_CONFIG.DEFAULT_INTENSITY;
+        light.color.setRGB(config.lightColor.r, config.lightColor.g, config.lightColor.b);
+      }
+    });
+
+    // Restore monitor content without re-adding lights
+    this.originalMonitorConfigs.forEach((config) => {
+      const monitor = this.monitors[config.index];
+      if (!monitor) return;
+
+      if (config.type === 'music') {
+        // Music player is already initialized, just ensure it's visible
+        if (this.musicPlayerMonitor === monitor && this.musicPlayerTexture) {
+          this.applyTexture(monitor, this.musicPlayerTexture, TEXTURE_CONFIG.TEXT_EMISSIVE_INTENSITY);
+        }
+      } else if (config.type === 'video') {
+        this.applyVideoTexture(monitor, config.path);
+      } else if (config.type === 'image') {
+        this.applyImageTexture(monitor, config.path).catch(console.error);
+      }
+    });
+
+    // Turn off light bulb
+    this.turnOffLightBulb();
+
+    this.monitorsAreOff = false;
+  }
+
+  /**
+   * Collect all emissive materials from LightBulb and its children
+   */
+  private collectEmissiveMaterials(object: THREE.Object3D): void {
+    this.lightBulbEmissiveMaterials = [];
+
+    object.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+        materials.forEach((mat) => {
+          // Check if material has emissive properties (any material type)
+          if ('emissive' in mat && 'emissiveIntensity' in mat) {
+            const emissiveMat = mat as any;
+            const originalIntensity = emissiveMat.emissiveIntensity || 0;
+            const originalColor = emissiveMat.emissive
+              ? (emissiveMat.emissive.clone ? emissiveMat.emissive.clone() : new THREE.Color(emissiveMat.emissive))
+              : new THREE.Color(0x000000);
+
+            this.lightBulbEmissiveMaterials.push({
+              material: mat,
+              originalIntensity,
+              originalColor
+            });
+          }
+        });
+      }
+    });
+  }
+
+  /**
+   * Turn on light bulb (emissive material + light source)
+   */
+  private turnOnLightBulb(): void {
+    if (!this.lightBulb) return;
+
+    // If we haven't collected materials yet, do it now
+    if (this.lightBulbEmissiveMaterials.length === 0) {
+      this.collectEmissiveMaterials(this.lightBulb);
+    }
+
+    if (this.lightBulbEmissiveMaterials.length === 0) return;
+
+    // Update all emissive materials
+    this.lightBulbEmissiveMaterials.forEach(({ material }) => {
+      const emissiveMat = material as any;
+      if ('emissiveIntensity' in emissiveMat && 'emissive' in emissiveMat) {
+        emissiveMat.emissiveIntensity = 2.0; // Bright emissive
+        emissiveMat.emissive = new THREE.Color(0xffffaa); // Warm yellow-white light
+        if ('needsUpdate' in emissiveMat) {
+          emissiveMat.needsUpdate = true;
+        }
+      }
+    });
+
+    // Add point light at light bulb position if it doesn't exist
+    if (!this.lightBulbLight) {
+      this.lightBulb.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(this.lightBulb);
+      const lightPosition = box.getCenter(new THREE.Vector3());
+
+      this.lightBulbLight = new THREE.PointLight(0xffffaa, 2.0, 15, 2);
+      this.lightBulbLight.position.copy(lightPosition);
+      this.scene.add(this.lightBulbLight);
+    } else {
+      // Re-enable existing light
+      this.lightBulbLight.intensity = 2.0;
+      this.lightBulbLight.visible = true;
+    }
+  }
+
+  /**
+   * Turn off light bulb (no emissive, remove light)
+   */
+  private turnOffLightBulb(): void {
+    if (!this.lightBulb) return;
+
+    // If we haven't collected materials yet, do it now
+    if (this.lightBulbEmissiveMaterials.length === 0) {
+      this.collectEmissiveMaterials(this.lightBulb);
+    }
+
+    if (this.lightBulbEmissiveMaterials.length === 0) return;
+
+    // Set emissive to zero (off state)
+    this.lightBulbEmissiveMaterials.forEach(({ material }) => {
+      const emissiveMat = material as any;
+      if ('emissiveIntensity' in emissiveMat && 'emissive' in emissiveMat) {
+        // Turn off by setting intensity to 0 and color to black
+        emissiveMat.emissiveIntensity = 0;
+        emissiveMat.emissive = new THREE.Color(0x000000);
+        if ('needsUpdate' in emissiveMat) {
+          emissiveMat.needsUpdate = true;
+        }
+      }
+    });
+
+    // Turn off or remove light
+    if (this.lightBulbLight) {
+      this.lightBulbLight.intensity = 0;
+      this.lightBulbLight.visible = false;
+    }
+  }
+
+  /**
+   * Handle ButtonButton click - toggle monitor state
+   */
+  private handleButtonButtonClick(): void {
+    if (!this.buttonClickEnabled) return;
+
+    if (this.monitorsAreOff) {
+      // Turn monitors back on with previous content
+      this.restoreMonitors();
+    } else {
+      // Turn monitors off: show ColoredStatic.mp4 once, then turn off
+      this.buttonClickEnabled = false; // Disable button during transition
+
+      // Create a single video element for ColoredStatic that plays once
+      const coloredStaticPath = 'assets/videos/ColoredStatic.mp4';
+      const video = document.createElement('video');
+      video.src = coloredStaticPath;
+      video.crossOrigin = 'anonymous';
+      video.loop = false;
+      video.muted = true;
+
+      // Store reference for cleanup
+      this.coloredStaticVideo = video;
+
+      // Apply ColoredStatic to all monitors (share the same video texture)
+      const texture = new THREE.VideoTexture(video);
+      this.configureTextureSettings(texture, false);
+
+      this.monitors.forEach((monitor) => {
+        this.applyTexture(monitor, texture, TEXTURE_CONFIG.VIDEO_EMISSIVE_INTENSITY, true);
+      });
+
+      // Play video once
+      video.play().catch((err) => {
+        console.warn('ColoredStatic video play failed:', err);
+        // If video fails to play, turn off monitors immediately
+        this.turnOffAllMonitors();
+      });
+
+      // When video ends, turn off all monitors
+      video.addEventListener('ended', () => {
+        this.turnOffAllMonitors();
+        // Clean up video
+        if (this.coloredStaticVideo) {
+          this.coloredStaticVideo.pause();
+          this.coloredStaticVideo.src = '';
+          this.coloredStaticVideo.load();
+          this.coloredStaticVideo = undefined;
+        }
+      }, { once: true });
+    }
+  }
+
   ngOnDestroy(): void {
     if (!isPlatformBrowser(this.platformId)) return;
 
@@ -1525,6 +1799,14 @@ export class CanvasComponent implements OnInit, OnDestroy {
     });
     this.videoElements = [];
 
+    // Clean up ColoredStatic video if it exists
+    if (this.coloredStaticVideo) {
+      this.coloredStaticVideo.pause();
+      this.coloredStaticVideo.src = '';
+      this.coloredStaticVideo.load();
+      this.coloredStaticVideo = undefined;
+    }
+
     // Clean up monitor lights
     this.monitorLights.forEach((light) => {
       // Remove target from scene (SpotLight has a target object)
@@ -1533,6 +1815,13 @@ export class CanvasComponent implements OnInit, OnDestroy {
       light.dispose();
     });
     this.monitorLights = [];
+
+    // Clean up light bulb light
+    if (this.lightBulbLight) {
+      this.scene.remove(this.lightBulbLight);
+      this.lightBulbLight.dispose();
+      this.lightBulbLight = undefined;
+    }
 
     // Clean up monitor highlights
     this.monitors.forEach((monitor) => {
