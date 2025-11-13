@@ -5,6 +5,87 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { FlyControls } from 'three/examples/jsm/controls/FlyControls';
 
+// Constants
+const CAMERA_CONFIG = {
+  FOV: 45,
+  NEAR: 0.25,
+  FAR: 20,
+  INITIAL_POSITION: { x: 1.11, y: 3.83, z: 8.51 },
+  INITIAL_QUATERNION: { x: -0.110, y: 0.047, z: 0.005, w: 0.993 }
+} as const;
+
+const MOVEMENT_CONFIG = {
+  BASE_SPEED: 2.0,
+  MAX_ROLL_ANGLE: Math.PI / 12, // 15 degrees
+  PERSON_HEIGHT: 5.5,
+  BOUNDS_PADDING: 0.5
+} as const;
+
+const RENDERER_CONFIG = {
+  TONE_MAPPING: THREE.ACESFilmicToneMapping,
+  TONE_MAPPING_EXPOSURE: 1
+} as const;
+
+const TRANSITION_CONFIG = {
+  DURATION: 1000, // 1 second
+  EASING: (t: number) => t * (2 - t) // Ease-out
+} as const;
+
+const TEXTURE_CONFIG = {
+  CANVAS_SIZE: 2048,
+  DEFAULT_EMISSIVE_INTENSITY: 1.5,
+  VIDEO_EMISSIVE_INTENSITY: 1.0,
+  TEXT_EMISSIVE_INTENSITY: 1.8
+} as const;
+
+const MONITOR_LIGHT_CONFIG = {
+  DEFAULT_INTENSITY: 1,
+  DEFAULT_DISTANCE: 10,
+  CONE_ANGLE: Math.PI / 2,
+  PENUMBRA: 1,
+  DECAY: 0.5,
+  OFFSET_BACK: -0.5,
+  TARGET_DISTANCE: 2.0
+} as const;
+
+const CAMERA_POSITION_CONFIG = {
+  MONITOR_DISTANCE_MULTIPLIER: 1.5,
+  CLIPBOARD_VERTICAL_OFFSET_MULTIPLIER: 1.4,
+  CLIPBOARD_LATERAL_OFFSET_MULTIPLIER: 0.4
+} as const;
+
+interface MonitorConfig {
+  index: number;
+  type: 'video' | 'image' | 'music';
+  path: string;
+  lightColor: { r: number; g: number; b: number };
+}
+
+interface ButtonRegion {
+  name: 'playpause' | 'next' | 'previous';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface CameraState {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+}
+
+interface MaterialWithUserData extends THREE.Material {
+  userData: {
+    isMonitor?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+interface IntersectionWithUV extends THREE.Intersection {
+  uv?: THREE.Vector2;
+  uv2?: THREE.Vector2;
+}
+
 @Component({
   selector: 'app-canvas',
   standalone: true,
@@ -16,46 +97,60 @@ export class CanvasComponent implements OnInit, OnDestroy {
   public scene!: THREE.Scene;
   public camera!: THREE.PerspectiveCamera;
   public renderer!: THREE.WebGLRenderer;
+
   private readonly platformId = inject(PLATFORM_ID);
   private readonly document = inject(DOCUMENT);
   @ViewChild('container', { static: true }) private containerRef!: ElementRef<HTMLDivElement>;
+
   private animateHandle?: number;
   private clock = new THREE.Clock();
-  private keyState: Record<string, boolean> = {};
-  private baseSpeed = 2.0; // units per second
   private onResize = () => this.onWindowResize();
   private flyControls?: FlyControls;
-  private videoElements: HTMLVideoElement[] = []; // Track video elements for cleanup
-  private fixedHeight: number = 0; // Fixed camera height (person height)
-  private sceneBounds?: { min: THREE.Vector3; max: THREE.Vector3 }; // Scene bounding box
-  private maxRollAngle: number = Math.PI / 12; // Maximum roll angle (15 degrees)
-  private monitors: THREE.Mesh[] = []; // Store monitor meshes for interaction
-  private monitorLights: THREE.SpotLight[] = []; // Store spot lights for monitors
-  private highlightTargets: THREE.Mesh[] = []; // Store meshes that should highlight on hover
-  private raycaster: THREE.Raycaster = new THREE.Raycaster();
-  private mouse: THREE.Vector2 = new THREE.Vector2();
-  private hoveredObject: THREE.Mesh | null = null; // Currently hovered interactive mesh
-  private focusedMonitor: THREE.Mesh | null = null; // Currently focused monitor (camera looking at it)
-  private focusedClipboard: THREE.Mesh | null = null; // Currently focused clipboard (camera looking at it)
-  private previousCameraState?: { position: THREE.Vector3; quaternion: THREE.Quaternion }; // Store previous camera state
-  private isTransitioning: boolean = false; // Track if camera is transitioning
-  private clipboardPageMesh?: THREE.Mesh; // Reference to clipboard page mesh
-  private clipboardInteractiveMesh?: THREE.Mesh; // Reference to clipboard board mesh used for interaction/highlight
-  private clipboardMeshGroup: THREE.Mesh[] = []; // All clipboard-related meshes for interaction
-  private clipboardPageUp?: THREE.Vector3; // Cached page up direction derived from UVs
-  private clipboardTextContent: string = `Project Notes
+
+  // Scene state
+  private fixedHeight = 0;
+  private sceneBounds?: { min: THREE.Vector3; max: THREE.Vector3 };
+
+  // Interaction state
+  private monitors: THREE.Mesh[] = [];
+  private monitorLights: THREE.SpotLight[] = [];
+  private highlightTargets: THREE.Mesh[] = [];
+  private raycaster = new THREE.Raycaster();
+  private mouse = new THREE.Vector2();
+  private hoveredObject: THREE.Mesh | null = null;
+  private focusedMonitor: THREE.Mesh | null = null;
+  private focusedClipboard: THREE.Mesh | null = null;
+  private previousCameraState?: CameraState;
+  private isTransitioning = false;
+
+  // Clipboard state
+  private clipboardPageMesh?: THREE.Mesh;
+  private clipboardInteractiveMesh?: THREE.Mesh;
+  private clipboardMeshGroup: THREE.Mesh[] = [];
+  private clipboardPageUp?: THREE.Vector3;
+  private readonly clipboardTextContent = `Project Notes
 - Polish 3D workspace
 - Refine monitor interactions
 - Record portfolio walkthrough`;
-  // Music player properties
-  private musicPlayerMonitor?: THREE.Mesh; // Reference to the music player monitor
-  private musicPlayerCanvas?: HTMLCanvasElement; // Canvas for music player UI
-  private musicPlayerTexture?: THREE.CanvasTexture; // Texture for music player
-  private audioElement?: HTMLAudioElement; // Audio element for playing music
-  private musicFiles: string[] = []; // List of music file paths
-  private currentSongIndex: number = 0; // Current song index
-  private isPlaying: boolean = false; // Play/pause state
-  private buttonRegions: { name: string; x: number; y: number; width: number; height: number }[] = []; // Button click regions
+
+  // Music player state
+  private musicPlayerMonitor?: THREE.Mesh;
+  private musicPlayerCanvas?: HTMLCanvasElement;
+  private musicPlayerTexture?: THREE.CanvasTexture;
+  private audioElement?: HTMLAudioElement;
+  private readonly musicFiles = [
+    'assets/music/Deftones - My Own Summer.mp3',
+    'assets/music/Ghost.mp3',
+    'assets/music/Logos.mp3',
+    'assets/music/Profissional.mp3',
+    'assets/music/Spybreak!.mp3'
+  ];
+  private currentSongIndex = 0;
+  private isPlaying = false;
+  private buttonRegions: ButtonRegion[] = [];
+
+  // Resource cleanup
+  private videoElements: HTMLVideoElement[] = [];
 
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
@@ -66,22 +161,32 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private init(): void {
     const container = this.containerRef.nativeElement;
 
-    this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.25, 20);
-    // Set refined initial transform
-    this.camera.position.set(1.11, 3.83, 8.51);
-    // Set initial rotation (preserve look direction but ensure no roll)
-    this.camera.quaternion.set(-0.110, 0.047, 0.005, 0.993);
-    // Ensure initial roll is zero
+    this.camera = new THREE.PerspectiveCamera(
+      CAMERA_CONFIG.FOV,
+      container.clientWidth / container.clientHeight,
+      CAMERA_CONFIG.NEAR,
+      CAMERA_CONFIG.FAR
+    );
+    this.camera.position.set(
+      CAMERA_CONFIG.INITIAL_POSITION.x,
+      CAMERA_CONFIG.INITIAL_POSITION.y,
+      CAMERA_CONFIG.INITIAL_POSITION.z
+    );
+    this.camera.quaternion.set(
+      CAMERA_CONFIG.INITIAL_QUATERNION.x,
+      CAMERA_CONFIG.INITIAL_QUATERNION.y,
+      CAMERA_CONFIG.INITIAL_QUATERNION.z,
+      CAMERA_CONFIG.INITIAL_QUATERNION.w
+    );
     this.camera.rotation.z = 0;
-
 
     this.scene = new THREE.Scene();
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1;
+    this.renderer.toneMapping = RENDERER_CONFIG.TONE_MAPPING;
+    this.renderer.toneMappingExposure = RENDERER_CONFIG.TONE_MAPPING_EXPOSURE;
     container.appendChild(this.renderer.domElement);
 
 
@@ -98,10 +203,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
         max: box.max.clone()
       };
 
-      // Set fixed height to floor level + person height (approximately 2.5 units above floor)
-      // This ensures the camera is at eye level, not on the floor
-      const personHeight = 5.5;
-      this.fixedHeight = this.sceneBounds.min.y + personHeight;
+      // Set fixed height to floor level + person height
+      this.fixedHeight = this.sceneBounds.min.y + MOVEMENT_CONFIG.PERSON_HEIGHT;
 
       // Update camera position to the calculated person height
       this.camera.position.y = this.fixedHeight;
@@ -116,7 +219,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       this.clipboardInteractiveMesh = undefined;
       this.clipboardPageUp = undefined;
 
-      const highlightObjectNames = new Set(['ButtonButton']);
+      const highlightObjectNames = new Set(['Button']);
       const foundHighlightNames = new Set<string>();
 
       this.scene.traverse((child) => {
@@ -124,10 +227,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
           const mat = child.material as THREE.Material | THREE.Material[];
 
           // Handle both single and multi-material meshes
-          const isMonitorMaterial =
-            Array.isArray(mat)
-              ? mat.some((m) => (m as any).userData?.isMonitor)
-              : (mat as any).userData?.isMonitor;
+          const isMonitorMaterial = Array.isArray(mat)
+            ? mat.some((m) => (m as MaterialWithUserData).userData?.isMonitor)
+            : (mat as MaterialWithUserData).userData?.isMonitor;
 
           // Check both mesh and material userData
           if (child.userData?.['isMonitor'] || isMonitorMaterial) {
@@ -198,45 +300,20 @@ export class CanvasComponent implements OnInit, OnDestroy {
         }
       });
 
-      //Apply different content to monitors
-      if (this.monitors.length > 0 && this.monitors[0]) {
-        this.applyVideoTexture(this.monitors[0], 'assets/videos/Pingpong.mp4');
-        this.addMonitorLight(this.monitors[0], 0.7, 0.85, 1.0); // Slight blue tint
-      }
-      if (this.monitors.length > 1 && this.monitors[1]) {
-        this.applyVideoTexture(this.monitors[1], 'assets/videos/NeoVSMerovingian.mp4');
-        this.addMonitorLight(this.monitors[1], 1.0, 0.95, 0.8); // Slight yellow tint
-      }
-      if (this.monitors.length > 2 && this.monitors[2]) {
-        this.applyImageTexture(this.monitors[2], 'assets/images/QRCode.png').catch(console.error);
-        this.addMonitorLight(this.monitors[2], 0.8, 0.9, 1.0);
-      }
-      if (this.monitors.length > 3 && this.monitors[3]) {
-        this.applyVideoTexture(this.monitors[3], 'assets/videos/RonaldinhoMagic.mp4');
-        this.addMonitorLight(this.monitors[3], 0.75, 1.0, 0.85); // Slight green tint
-      }
-      if (this.monitors.length > 4 && this.monitors[4]) {
-        this.applyVideoTexture(this.monitors[4], 'assets/videos/ColoredStatic.mp4');
-        this.addMonitorLight(this.monitors[4], 1.0, 0.8, 0.9); // Slight pink tint
-      }
-      if (this.monitors.length > 5 && this.monitors[5]) {
-        this.applyImageTexture(this.monitors[5], "assets/images/DontPress.png");
-        this.addMonitorLight(this.monitors[5], 1.0, 0.8, 0.8); // Slight red tint
-      }
-      if (this.monitors.length > 6 && this.monitors[6]) {
-        this.musicPlayerMonitor = this.monitors[6];
-        this.initializeMusicPlayer();
-        this.addMonitorLight(this.monitors[6], 0.8, 0.9, 1.0);
-      }
-      if (this.monitors.length > 7 && this.monitors[7]) {
-        this.applyVideoTexture(this.monitors[7], 'assets/videos/Static.mp4');
-        this.addMonitorLight(this.monitors[7], 0.8, 0.9, 1.0);
-      }
+      // Apply different content to monitors
+      const monitorConfigs: MonitorConfig[] = [
+        { index: 0, type: 'video', path: 'assets/videos/Pingpong.mp4', lightColor: { r: 0.7, g: 0.85, b: 1.0 } },
+        { index: 1, type: 'video', path: 'assets/videos/NeoVSMerovingian.mp4', lightColor: { r: 1.0, g: 0.95, b: 0.8 } },
+        { index: 2, type: 'image', path: 'assets/images/QRCode.png', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
+        { index: 3, type: 'video', path: 'assets/videos/RonaldinhoMagic.mp4', lightColor: { r: 0.75, g: 1.0, b: 0.85 } },
+        { index: 4, type: 'video', path: 'assets/videos/ColoredStatic.mp4', lightColor: { r: 1.0, g: 0.8, b: 0.9 } },
+        { index: 5, type: 'image', path: 'assets/images/DontPress.png', lightColor: { r: 1.0, g: 0.8, b: 0.8 } },
+        { index: 6, type: 'music', path: '', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
+        { index: 7, type: 'video', path: 'assets/videos/Static.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
+        { index: 8, type: 'video', path: 'assets/videos/Teamwork.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } }
+      ];
 
-      if (this.monitors.length > 8 && this.monitors[8]) {
-        this.applyVideoTexture(this.monitors[8], 'assets/videos/Teamwork.mp4');
-        this.addMonitorLight(this.monitors[8], 0.8, 0.9, 1.0);
-      }
+      this.setupMonitors(monitorConfigs);
 
       if (this.clipboardPageMesh) {
         this.applyTextTexture(this.clipboardPageMesh, this.clipboardTextContent, {
@@ -246,7 +323,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
           fontFamily: 'Segoe UI',
           fontWeight: '600',
           padding: 240,
-          emissiveIntensity: 0.35
+          emissiveIntensity: 0 // No light emission - just regular material like paper
         });
       }
 
@@ -258,15 +335,34 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     this.flyControls = new FlyControls(this.camera, this.renderer.domElement);
     this.flyControls.movementSpeed = 5;
-    this.flyControls.rollSpeed = Math.PI / 12; // Allow limited roll (Q/E keys) - about 15 degrees per second
-    this.flyControls.dragToLook = true; // hold mouse to look
+    this.flyControls.rollSpeed = MOVEMENT_CONFIG.MAX_ROLL_ANGLE;
+    this.flyControls.dragToLook = true;
     this.flyControls.autoForward = false;
 
     window.addEventListener('resize', this.onResize);
-    window.addEventListener('keydown', this.onKeyDown, false);
-    window.addEventListener('keyup', this.onKeyUp, false);
 
     this.startAnimationLoop();
+  }
+
+  /**
+   * Setup monitors with their content and lighting
+   */
+  private setupMonitors(configs: MonitorConfig[]): void {
+    for (const config of configs) {
+      const monitor = this.monitors[config.index];
+      if (!monitor) continue;
+
+      if (config.type === 'music') {
+        this.musicPlayerMonitor = monitor;
+        this.initializeMusicPlayer();
+      } else if (config.type === 'video') {
+        this.applyVideoTexture(monitor, config.path);
+      } else if (config.type === 'image') {
+        this.applyImageTexture(monitor, config.path).catch(console.error);
+      }
+
+      this.addMonitorLight(monitor, config.lightColor.r, config.lightColor.g, config.lightColor.b);
+    }
   }
 
   /**
@@ -365,10 +461,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
       // Check if this is the music player monitor and we're focused on it
       if (monitor === this.musicPlayerMonitor && this.focusedMonitor === this.musicPlayerMonitor) {
         // Get UV coordinates from intersection (try uv first, then uv2)
-        const uvCoords = (intersection as any).uv || (intersection as any).uv2;
+        const intersectionWithUV = intersection as IntersectionWithUV;
+        const uvCoords = intersectionWithUV.uv || intersectionWithUV.uv2;
         if (uvCoords) {
-          const uv = { x: uvCoords.x, y: uvCoords.y };
-          this.handleMusicPlayerClick(uv);
+          this.handleMusicPlayerClick({ x: uvCoords.x, y: uvCoords.y });
         }
         return; // Don't move camera when clicking buttons
       }
@@ -598,9 +694,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
     const screenNormal = worldZ.clone();
 
     // Calculate optimal viewing distance based on monitor size
-    // Use the larger dimension to ensure we can see the whole monitor
     const maxDimension = Math.max(size.x, size.y, size.z);
-    const distance = maxDimension * 1.5; // Position 1.5x the monitor size away for closer viewing
+    const distance = maxDimension * CAMERA_POSITION_CONFIG.MONITOR_DISTANCE_MULTIPLIER;
 
     // Position camera in front of monitor (in the direction the screen faces)
     const targetPosition = monitorCenter.clone().add(screenNormal.multiplyScalar(distance));
@@ -697,8 +792,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
       pageRight.normalize();
     }
 
-    const lateralOffset = Math.max(size.x, size.z) * 0.4;
-    const verticalOffset = Math.max(size.x, size.y, size.z) * 1.4;
+    const lateralOffset = Math.max(size.x, size.z) * CAMERA_POSITION_CONFIG.CLIPBOARD_LATERAL_OFFSET_MULTIPLIER;
+    const verticalOffset = Math.max(size.x, size.y, size.z) * CAMERA_POSITION_CONFIG.CLIPBOARD_VERTICAL_OFFSET_MULTIPLIER;
 
     let targetPosition = clipboardCenter
       .clone()
@@ -776,15 +871,12 @@ export class CanvasComponent implements OnInit, OnDestroy {
   ): void {
     const startPosition = this.camera.position.clone();
     const startQuaternion = this.camera.quaternion.clone();
-    const duration = 1000; // 1 second transition
     const startTime = Date.now();
 
     const animate = () => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-
-      // Easing function for smooth transition
-      const easeProgress = progress * (2 - progress); // Ease-out
+      const progress = Math.min(elapsed / TRANSITION_CONFIG.DURATION, 1);
+      const easeProgress = TRANSITION_CONFIG.EASING(progress);
 
       // Interpolate position
       this.camera.position.lerpVectors(startPosition, targetPosition, easeProgress);
@@ -824,12 +916,12 @@ export class CanvasComponent implements OnInit, OnDestroy {
         // Lock camera height to fixed person height
         this.camera.position.y = this.fixedHeight;
         // Limit roll rotation to a small range (±15 degrees)
-        this.camera.rotation.z = Math.max(-this.maxRollAngle, Math.min(this.maxRollAngle, this.camera.rotation.z));
+        this.camera.rotation.z = Math.max(
+          -MOVEMENT_CONFIG.MAX_ROLL_ANGLE,
+          Math.min(MOVEMENT_CONFIG.MAX_ROLL_ANGLE, this.camera.rotation.z)
+        );
         // Clamp camera position to scene bounds
         this.constrainCameraToBounds();
-      }
-      if (!this.isTransitioning && !this.focusedMonitor && !this.focusedClipboard) {
-        this.updateCameraFromKeys(delta);
       }
       this.render();
       this.animateHandle = requestAnimationFrame(loop);
@@ -843,90 +935,36 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private constrainCameraToBounds(): void {
     if (!this.sceneBounds) return;
 
-    const padding = 0.5; // Small padding to prevent camera from going exactly to edge
-    const x = this.camera.position.x;
-    const y = this.camera.position.y;
-    const z = this.camera.position.z;
+    const padding = MOVEMENT_CONFIG.BOUNDS_PADDING;
+    const { x, y, z } = this.camera.position;
 
-    // Clamp X position
+    // Clamp positions
     this.camera.position.x = Math.max(
       this.sceneBounds.min.x + padding,
       Math.min(this.sceneBounds.max.x - padding, x)
     );
-
-    // Y is already locked to fixedHeight, but ensure it's within bounds
     this.camera.position.y = Math.max(
       this.sceneBounds.min.y + padding,
       Math.min(this.sceneBounds.max.y - padding, this.fixedHeight)
     );
-
-    // Clamp Z position
     this.camera.position.z = Math.max(
       this.sceneBounds.min.z + padding,
       Math.min(this.sceneBounds.max.z - padding, z)
     );
   }
 
-  private updateCameraFromKeys(delta: number): void {
-    if (this.flyControls) {
-      // FlyControls already handles WASD/EQ + mouse look; skip manual movement to avoid conflicts
-      return;
-    }
-    const speed = this.baseSpeed * delta;
-
-    const direction = new THREE.Vector3();
-    this.camera.getWorldDirection(direction);
-
-    const move = new THREE.Vector3();
-
-    // Forward / Back (W / S)
-    if (this.keyState['KeyW']) {
-      const v = direction.clone().multiplyScalar(speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-    if (this.keyState['KeyS']) {
-      const v = direction.clone().multiplyScalar(-speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-
-    // Strafe Left / Right (A / D)
-    const right = new THREE.Vector3().crossVectors(direction, this.camera.up).normalize();
-    if (this.keyState['KeyD']) {
-      const v = right.clone().multiplyScalar(speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-    if (this.keyState['KeyA']) {
-      const v = right.clone().multiplyScalar(-speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-
-    // Up / Down (Space / Shift)
-    const up = this.camera.up.clone().normalize();
-    if (this.keyState['Space']) {
-      const v = up.clone().multiplyScalar(speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-    if (this.keyState['ShiftLeft'] || this.keyState['ShiftRight']) {
-      const v = up.clone().multiplyScalar(-speed);
-      this.camera.position.add(v);
-      move.add(v);
-    }
-
-    // no target to sync when using FlyControls or manual free camera
+  /**
+   * Configures texture settings for consistent behavior
+   */
+  private configureTextureSettings(texture: THREE.Texture, generateMipmaps: boolean = true): void {
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = generateMipmaps;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.repeat.set(1, 1);
+    texture.offset.set(0, 0);
   }
-
-  private onKeyDown = (event: KeyboardEvent) => {
-    this.keyState[event.code] = true;
-  };
-
-  private onKeyUp = (event: KeyboardEvent) => {
-    this.keyState[event.code] = false;
-  };
 
   /**
    * Applies a video texture to a monitor mesh with emissive lighting
@@ -936,7 +974,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     video.src = videoPath;
     video.crossOrigin = 'anonymous';
     video.loop = true;
-    video.muted = true; // Muted for autoplay
+    video.muted = true;
     video.play().catch((err) => {
       console.warn('Video autoplay failed:', err);
     });
@@ -944,15 +982,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.videoElements.push(video);
 
     const texture = new THREE.VideoTexture(video);
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.generateMipmaps = false; // Video textures don't need mipmaps
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
-    texture.offset.set(0, 0); // No offset
+    this.configureTextureSettings(texture, false); // Video textures don't need mipmaps
 
-    this.applyTexture(monitor, texture, 1.0, true); // Reduced emissive intensity for videos, isVideo flag
+    this.applyTexture(monitor, texture, TEXTURE_CONFIG.VIDEO_EMISSIVE_INTENSITY, true);
   }
 
   /**
@@ -964,13 +996,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
       loader.load(
         imagePath,
         (texture) => {
-          texture.minFilter = THREE.LinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          texture.wrapS = THREE.ClampToEdgeWrapping;
-          texture.wrapT = THREE.ClampToEdgeWrapping;
-          texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
-          texture.offset.set(0, 0); // No offset
-          this.applyTexture(monitor, texture, 1.5);
+          this.configureTextureSettings(texture);
+          this.applyTexture(monitor, texture, TEXTURE_CONFIG.DEFAULT_EMISSIVE_INTENSITY);
           resolve();
         },
         undefined,
@@ -1015,9 +1042,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Set canvas size (square for short text phrases)
-    canvas.width = 2048;
-    canvas.height = 2048;
+    canvas.width = TEXTURE_CONFIG.CANVAS_SIZE;
+    canvas.height = TEXTURE_CONFIG.CANVAS_SIZE;
 
     // Fill background
     context.fillStyle = bgColor;
@@ -1074,13 +1100,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     // Create texture from canvas
     const texture = new THREE.CanvasTexture(canvas);
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.repeat.set(1, 1); // Ensure texture displays at 1:1 scale
-    texture.offset.set(0, 0); // No offset
-
+    this.configureTextureSettings(texture);
     this.applyTexture(mesh, texture, emissiveIntensity);
   }
 
@@ -1129,48 +1149,49 @@ export class CanvasComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Creates or clones a material with emissive properties
+   */
+  private createEmissiveMaterial(
+    originalMaterial: THREE.Material,
+    texture: THREE.Texture,
+    emissiveIntensity: number,
+    isVideo: boolean
+  ): THREE.MeshStandardMaterial {
+    let material: THREE.MeshStandardMaterial;
+
+    if (originalMaterial instanceof THREE.MeshStandardMaterial || originalMaterial instanceof THREE.MeshPhysicalMaterial) {
+      material = originalMaterial.clone() as THREE.MeshStandardMaterial;
+    } else {
+      material = new THREE.MeshStandardMaterial();
+    }
+
+    this.configureEmissiveMaterial(material, texture, emissiveIntensity, isVideo);
+    return material;
+  }
+
+  /**
    * Applies a texture to a mesh with emissive material
    * IMPORTANT: Clones materials to ensure each mesh has its own unique material instance
    */
-  private applyTexture(mesh: THREE.Mesh, texture: THREE.Texture, emissiveIntensity: number = 1.5, isVideo: boolean = false): void {
+  private applyTexture(
+    mesh: THREE.Mesh,
+    texture: THREE.Texture,
+    emissiveIntensity: number = TEXTURE_CONFIG.DEFAULT_EMISSIVE_INTENSITY,
+    isVideo: boolean = false
+  ): void {
     const originalMaterial = mesh.material as THREE.Material | THREE.Material[];
 
     if (Array.isArray(originalMaterial)) {
-      // Handle multi-material meshes - clone each material
-      const clonedMaterials = originalMaterial.map((mat) => {
-        if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
-          // Clone the material to avoid sharing between meshs
-          const clonedMat = mat.clone();
-          this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
-          return clonedMat;
-        } else {
-          // Convert to MeshStandardMaterial
-          const newMat = new THREE.MeshStandardMaterial();
-          this.configureEmissiveMaterial(newMat, texture, emissiveIntensity, isVideo);
-          return newMat;
-        }
-      });
-      mesh.material = clonedMaterials;
+      mesh.material = originalMaterial.map((mat) =>
+        this.createEmissiveMaterial(mat, texture, emissiveIntensity, isVideo)
+      );
     } else {
-      // Handle single material - clone it to avoid sharing
-      if (originalMaterial instanceof THREE.MeshStandardMaterial || originalMaterial instanceof THREE.MeshPhysicalMaterial) {
-        // Clone the material so each monitor has its own instance
-        const clonedMat = originalMaterial.clone();
-        this.configureEmissiveMaterial(clonedMat, texture, emissiveIntensity, isVideo);
-        mesh.material = clonedMat;
-      } else {
-        // Convert to MeshStandardMaterial
-        const newMat = new THREE.MeshStandardMaterial();
-        this.configureEmissiveMaterial(newMat, texture, emissiveIntensity, isVideo);
-        mesh.material = newMat;
-      }
+      mesh.material = this.createEmissiveMaterial(originalMaterial, texture, emissiveIntensity, isVideo);
     }
 
-    // Update UV mapping if needed (some models may need this)
+    // Update UV mapping if needed
     if (mesh.geometry) {
       mesh.geometry.computeBoundingBox();
-
-      // Normalize UV coordinates if they're in a small range (fixes zoomed-in textures)
       this.normalizeMonitorUVs(mesh);
     }
   }
@@ -1225,16 +1246,24 @@ export class CanvasComponent implements OnInit, OnDestroy {
     worldZ.normalize();
 
     // Position light at monitor center, but further behind the screen to avoid blocking content
-    const lightOffsetBack = -0.5; // Increased offset behind the screen to prevent visibility
-    const lightPosition = monitorCenter.clone().add(worldZ.clone().multiplyScalar(lightOffsetBack));
+    const lightPosition = monitorCenter.clone().add(
+      worldZ.clone().multiplyScalar(MONITOR_LIGHT_CONFIG.OFFSET_BACK)
+    );
 
     // Calculate target position (light shines away from monitor in the direction it faces)
-    const targetPosition = monitorCenter.clone().add(worldZ.clone().multiplyScalar(2.0));
+    const targetPosition = monitorCenter.clone().add(
+      worldZ.clone().multiplyScalar(MONITOR_LIGHT_CONFIG.TARGET_DISTANCE)
+    );
 
     // Create spot light with the specified color
-    // SpotLight shines in a cone from position toward target
-    // Increased cone angle (Math.PI / 2 = 90 degrees), decreased decay (0.5), increased default intensity (4.0)
-    const light = new THREE.SpotLight(new THREE.Color(r, g, b), intensity, distance, Math.PI / 2, 1, 0.5);
+    const light = new THREE.SpotLight(
+      new THREE.Color(r, g, b),
+      intensity,
+      distance,
+      MONITOR_LIGHT_CONFIG.CONE_ANGLE,
+      MONITOR_LIGHT_CONFIG.PENUMBRA,
+      MONITOR_LIGHT_CONFIG.DECAY
+    );
     light.position.copy(lightPosition);
     light.target.position.copy(targetPosition);
 
@@ -1253,15 +1282,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
    * Initialize the music player
    */
   private initializeMusicPlayer(): void {
-    // Load music files
-    this.musicFiles = [
-      'assets/music/Deftones - My Own Summer.mp3',
-      'assets/music/Ghost.mp3',
-      'assets/music/Logos.mp3',
-      'assets/music/Profissional.mp3',
-      'assets/music/Spybreak!.mp3'
-    ];
-
     // Create audio element
     this.audioElement = new Audio();
     this.audioElement.addEventListener('ended', () => {
@@ -1270,8 +1290,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     // Create canvas for music player UI
     this.musicPlayerCanvas = document.createElement('canvas');
-    this.musicPlayerCanvas.width = 2048;
-    this.musicPlayerCanvas.height = 2048;
+    this.musicPlayerCanvas.width = TEXTURE_CONFIG.CANVAS_SIZE;
+    this.musicPlayerCanvas.height = TEXTURE_CONFIG.CANVAS_SIZE;
 
     // Draw initial UI
     this.drawMusicPlayer();
@@ -1285,7 +1305,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     // Apply texture to monitor
     if (this.musicPlayerMonitor) {
-      this.applyTexture(this.musicPlayerMonitor, this.musicPlayerTexture, 1.8);
+      this.applyTexture(this.musicPlayerMonitor, this.musicPlayerTexture, TEXTURE_CONFIG.TEXT_EMISSIVE_INTENSITY);
     }
   }
 
@@ -1527,8 +1547,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
     }
 
     window.removeEventListener('resize', this.onResize);
-    window.removeEventListener('keydown', this.onKeyDown, false);
-    window.removeEventListener('keyup', this.onKeyUp, false);
     if (this.animateHandle) cancelAnimationFrame(this.animateHandle);
   }
 }
