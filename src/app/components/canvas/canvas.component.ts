@@ -74,6 +74,8 @@ interface CameraState {
   quaternion: THREE.Quaternion;
 }
 
+type ManagedVideoElement = HTMLVideoElement & { __sourcePath?: string };
+
 interface MaterialWithUserData extends THREE.Material {
   userData: {
     isMonitor?: boolean;
@@ -131,7 +133,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private readonly clipboardTextContent = `Project Notes
 - Polish 3D workspace
 - Refine monitor interactions
-- Record portfolio walkthrough`;
+- Introduce button functionality`;
 
   // Music player state
   private musicPlayerMonitor?: THREE.Mesh;
@@ -139,10 +141,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private musicPlayerTexture?: THREE.CanvasTexture;
   private audioElement?: HTMLAudioElement;
   private readonly musicFiles = [
-    'assets/music/Deftones - My Own Summer.mp3',
+    'assets/music/Professional.mp3',
     'assets/music/Ghost.mp3',
     'assets/music/Logos.mp3',
-    'assets/music/Profissional.mp3',
     'assets/music/Spybreak!.mp3'
   ];
   private currentSongIndex = 0;
@@ -151,6 +152,13 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
   // Resource cleanup
   private videoElements: HTMLVideoElement[] = [];
+  private monitorVideoMap = new Map<THREE.Mesh, HTMLVideoElement>();
+  private dontPressMonitor?: THREE.Mesh;
+  private dontPressImageTexture?: THREE.Texture;
+  private dontPressVideoElement?: HTMLVideoElement;
+  private dontPressVideoTexture?: THREE.VideoTexture;
+  private dontPressCycleTimeout?: number;
+  private dontPressCycleEnabled = true;
 
   // ButtonButton state
   private buttonButton?: THREE.Mesh;
@@ -341,10 +349,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
         { index: 1, type: 'video', path: 'assets/videos/NeoVSMerovingian.mp4', lightColor: { r: 1.0, g: 0.95, b: 0.8 } },
         { index: 2, type: 'image', path: 'assets/images/QRCode.png', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
         { index: 3, type: 'video', path: 'assets/videos/RonaldinhoMagic.mp4', lightColor: { r: 0.75, g: 1.0, b: 0.85 } },
-        { index: 4, type: 'video', path: 'assets/videos/ColoredStatic.mp4', lightColor: { r: 1.0, g: 0.8, b: 0.9 } },
+        { index: 4, type: 'video', path: 'assets/videos/Static.mp4', lightColor: { r: 1.0, g: 0.8, b: 0.9 } },
         { index: 5, type: 'image', path: 'assets/images/DontPress.png', lightColor: { r: 1.0, g: 0.8, b: 0.8 } },
         { index: 6, type: 'music', path: '', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
-        { index: 7, type: 'video', path: 'assets/videos/Static.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
+        { index: 7, type: 'video', path: 'assets/videos/TheOffice.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } },
         { index: 8, type: 'video', path: 'assets/videos/Teamwork.mp4', lightColor: { r: 0.8, g: 0.9, b: 1.0 } }
       ];
 
@@ -390,14 +398,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       const monitor = this.monitors[config.index];
       if (!monitor) continue;
 
-      if (config.type === 'music') {
-        this.musicPlayerMonitor = monitor;
-        this.initializeMusicPlayer();
-      } else if (config.type === 'video') {
-        this.applyVideoTexture(monitor, config.path);
-      } else if (config.type === 'image') {
-        this.applyImageTexture(monitor, config.path).catch(console.error);
-      }
+      this.applyMonitorConfig(config, monitor);
 
       this.addMonitorLight(monitor, config.lightColor.r, config.lightColor.g, config.lightColor.b);
     }
@@ -412,6 +413,36 @@ export class CanvasComponent implements OnInit, OnDestroy {
     container.addEventListener('mousemove', this.onMouseMove);
     container.addEventListener('click', this.onMouseClick);
     container.style.cursor = 'default';
+  }
+
+  /**
+   * Apply the configured content to a monitor
+   */
+  private applyMonitorConfig(config: MonitorConfig, monitor: THREE.Mesh): void {
+    switch (config.type) {
+      case 'music':
+        this.musicPlayerMonitor = monitor;
+        if (this.musicPlayerTexture) {
+          this.applyTexture(monitor, this.musicPlayerTexture, TEXTURE_CONFIG.TEXT_EMISSIVE_INTENSITY);
+        } else {
+          this.initializeMusicPlayer();
+        }
+        break;
+      case 'video':
+        this.applyVideoTexture(monitor, config.path);
+        break;
+      case 'image':
+        if (this.isDontPressConfig(config)) {
+          this.setupDontPressMonitor(monitor, config.path);
+        } else {
+          this.applyImageTexture(monitor, config.path).catch(console.error);
+        }
+        break;
+    }
+  }
+
+  private isDontPressConfig(config: MonitorConfig): boolean {
+    return config.path.toLowerCase().includes('dontpress');
   }
 
   /**
@@ -713,6 +744,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
   private moveCameraToMonitor(monitor: THREE.Mesh): void {
     if (this.isTransitioning) return;
 
+    // Ensure other videos remain muted during transition
+    this.updateVideoAudioStates(null);
+    this.stopMusicPlayback();
+
     // Store current camera state
     this.previousCameraState = {
       position: this.camera.position.clone(),
@@ -770,6 +805,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       if (this.flyControls) {
         this.flyControls.enabled = false;
       }
+      this.updateVideoAudioStates(monitor);
     });
   }
 
@@ -778,6 +814,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
    */
   private moveCameraToClipboard(clipboard: THREE.Mesh): void {
     if (this.isTransitioning) return;
+
+    this.updateVideoAudioStates(null);
 
     this.previousCameraState = {
       position: this.camera.position.clone(),
@@ -893,6 +931,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
         this.focusedMonitor = null;
         this.focusedClipboard = null;
         this.previousCameraState = undefined;
+        this.updateVideoAudioStates(null);
 
         // Re-enable fly controls
         if (this.flyControls) {
@@ -1014,19 +1053,41 @@ export class CanvasComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Create a managed video element with default settings for monitor playback
+   */
+  private createManagedVideoElement(): ManagedVideoElement {
+    const video = document.createElement('video') as ManagedVideoElement;
+    video.crossOrigin = 'anonymous';
+    video.muted = true;
+    video.volume = 1;
+    video.playsInline = true;
+    video.preload = 'auto';
+    return video;
+  }
+
+  /**
    * Applies a video texture to a monitor mesh with emissive lighting
    */
   private applyVideoTexture(monitor: THREE.Mesh, videoPath: string, loop: boolean = true): void {
-    const video = document.createElement('video');
-    video.src = videoPath;
-    video.crossOrigin = 'anonymous';
+    let video = this.monitorVideoMap.get(monitor) as ManagedVideoElement | undefined;
+
+    if (!video) {
+      video = this.createManagedVideoElement();
+      this.videoElements.push(video);
+      this.monitorVideoMap.set(monitor, video);
+    }
+
+    if (video.__sourcePath !== videoPath) {
+      video.pause();
+      video.src = videoPath;
+      video.load();
+      video.__sourcePath = videoPath;
+    }
+
     video.loop = loop;
-    video.muted = true;
     video.play().catch((err) => {
       console.warn('Video autoplay failed:', err);
     });
-
-    this.videoElements.push(video);
 
     const texture = new THREE.VideoTexture(video);
     this.configureTextureSettings(texture, false); // Video textures don't need mipmaps
@@ -1055,6 +1116,125 @@ export class CanvasComponent implements OnInit, OnDestroy {
       );
     });
   }
+
+  /**
+   * Enable or disable the DontPress monitor cycle
+   */
+  private setDontPressCycleEnabled(enabled: boolean): void {
+    this.dontPressCycleEnabled = enabled;
+
+    if (!enabled) {
+      if (this.dontPressCycleTimeout) {
+        window.clearTimeout(this.dontPressCycleTimeout);
+        this.dontPressCycleTimeout = undefined;
+      }
+      if (this.dontPressVideoElement) {
+        this.dontPressVideoElement.pause();
+        this.dontPressVideoElement.currentTime = 0;
+      }
+      return;
+    }
+
+    this.showDontPressImage();
+  }
+
+  /**
+   * Specialized setup for the DontPress monitor which alternates between an image and a video
+   */
+  private setupDontPressMonitor(monitor: THREE.Mesh, imagePath: string): void {
+    this.dontPressMonitor = monitor;
+
+    if (this.dontPressImageTexture) {
+      this.showDontPressImage();
+    } else {
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        imagePath,
+        (texture) => {
+          this.configureTextureSettings(texture);
+          this.dontPressImageTexture = texture;
+          this.showDontPressImage();
+        },
+        undefined,
+        (error) => {
+          console.error('Error loading DontPress texture:', error);
+        }
+      );
+    }
+
+    this.ensureDontPressVideoResources();
+  }
+
+  /**
+   * Ensure video resources for the DontPress monitor are initialized once
+   */
+  private ensureDontPressVideoResources(): void {
+    if (!this.dontPressMonitor || this.dontPressVideoElement) return;
+
+    const video = this.createManagedVideoElement();
+    video.src = 'assets/videos/ColoredStatic.mp4';
+    video.loop = false;
+    video.addEventListener('ended', this.handleDontPressVideoEnded);
+
+    this.videoElements.push(video);
+    this.monitorVideoMap.set(this.dontPressMonitor, video);
+    this.dontPressVideoElement = video;
+
+    const texture = new THREE.VideoTexture(video);
+    this.configureTextureSettings(texture, false);
+    this.dontPressVideoTexture = texture;
+  }
+
+  /**
+   * Display the DontPress image and schedule the video playback
+   */
+  private showDontPressImage(): void {
+    if (!this.dontPressCycleEnabled || !this.dontPressMonitor || !this.dontPressImageTexture) return;
+
+    if (this.dontPressVideoElement) {
+      this.dontPressVideoElement.pause();
+    }
+
+    this.applyTexture(this.dontPressMonitor, this.dontPressImageTexture, TEXTURE_CONFIG.DEFAULT_EMISSIVE_INTENSITY);
+    this.scheduleDontPressVideo();
+  }
+
+  /**
+   * Schedule the ColoredStatic video to play after 5 seconds
+   */
+  private scheduleDontPressVideo(): void {
+    if (!this.dontPressCycleEnabled) return;
+
+    if (this.dontPressCycleTimeout) {
+      window.clearTimeout(this.dontPressCycleTimeout);
+    }
+    this.dontPressCycleTimeout = window.setTimeout(() => {
+      this.dontPressCycleTimeout = undefined;
+      this.showDontPressVideo();
+    }, 5000);
+  }
+
+  /**
+   * Apply the ColoredStatic video texture and start playback
+   */
+  private showDontPressVideo(): void {
+    if (!this.dontPressCycleEnabled || !this.dontPressMonitor) return;
+    if (!this.dontPressVideoElement || !this.dontPressVideoTexture) {
+      this.ensureDontPressVideoResources();
+    }
+    if (!this.dontPressVideoElement || !this.dontPressVideoTexture) return;
+
+    this.applyTexture(this.dontPressMonitor, this.dontPressVideoTexture, TEXTURE_CONFIG.VIDEO_EMISSIVE_INTENSITY, true);
+    this.dontPressVideoElement.currentTime = 0;
+    this.dontPressVideoElement.play().catch((err) => {
+      console.warn('DontPress video play failed:', err);
+    });
+  }
+
+  private handleDontPressVideoEnded = (): void => {
+    if (!this.dontPressCycleEnabled) return;
+    this.showDontPressImage();
+  };
 
   /**
    * Applies a text texture to a mesh with emissive lighting
@@ -1241,6 +1421,21 @@ export class CanvasComponent implements OnInit, OnDestroy {
       mesh.geometry.computeBoundingBox();
       this.normalizeMonitorUVs(mesh);
     }
+  }
+
+  /**
+   * Enable audio only for the currently focused video monitor
+   */
+  private updateVideoAudioStates(activeMonitor: THREE.Mesh | null): void {
+    this.monitorVideoMap.forEach((video, monitor) => {
+      const shouldEnableAudio = activeMonitor === monitor;
+      video.muted = !shouldEnableAudio;
+      video.volume = shouldEnableAudio ? 1 : 0;
+
+      if (shouldEnableAudio) {
+        video.play().catch((err) => console.warn('Video audio resume failed:', err));
+      }
+    });
   }
 
   /**
@@ -1537,6 +1732,19 @@ export class CanvasComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Stop any ongoing music playback
+   */
+  private stopMusicPlayback(): void {
+    if (!this.audioElement) return;
+
+    if (!this.audioElement.paused || this.isPlaying) {
+      this.audioElement.pause();
+      this.isPlaying = false;
+      this.drawMusicPlayer();
+    }
+  }
+
+  /**
    * Load the current song
    */
   private loadCurrentSong(): void {
@@ -1551,6 +1759,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
    * Turn all monitors off (black screen, no light)
    */
   private turnOffAllMonitors(): void {
+    this.setDontPressCycleEnabled(false);
+
     // Create black texture
     const canvas = document.createElement('canvas');
     canvas.width = TEXTURE_CONFIG.CANVAS_SIZE;
@@ -1598,23 +1808,14 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.originalMonitorConfigs.forEach((config) => {
       const monitor = this.monitors[config.index];
       if (!monitor) return;
-
-      if (config.type === 'music') {
-        // Music player is already initialized, just ensure it's visible
-        if (this.musicPlayerMonitor === monitor && this.musicPlayerTexture) {
-          this.applyTexture(monitor, this.musicPlayerTexture, TEXTURE_CONFIG.TEXT_EMISSIVE_INTENSITY);
-        }
-      } else if (config.type === 'video') {
-        this.applyVideoTexture(monitor, config.path);
-      } else if (config.type === 'image') {
-        this.applyImageTexture(monitor, config.path).catch(console.error);
-      }
+      this.applyMonitorConfig(config, monitor);
     });
 
     // Turn off light bulb
     this.turnOffLightBulb();
 
     this.monitorsAreOff = false;
+    this.setDontPressCycleEnabled(true);
   }
 
   /**
@@ -1733,14 +1934,13 @@ export class CanvasComponent implements OnInit, OnDestroy {
     } else {
       // Turn monitors off: show ColoredStatic.mp4 once, then turn off
       this.buttonClickEnabled = false; // Disable button during transition
+      this.setDontPressCycleEnabled(false);
 
       // Create a single video element for ColoredStatic that plays once
       const coloredStaticPath = 'assets/videos/ColoredStatic.mp4';
-      const video = document.createElement('video');
+      const video = this.createManagedVideoElement();
       video.src = coloredStaticPath;
-      video.crossOrigin = 'anonymous';
       video.loop = false;
-      video.muted = true;
 
       // Store reference for cleanup
       this.coloredStaticVideo = video;
@@ -1798,6 +1998,23 @@ export class CanvasComponent implements OnInit, OnDestroy {
       video.load();
     });
     this.videoElements = [];
+    this.monitorVideoMap.clear();
+
+    if (this.dontPressCycleTimeout) {
+      window.clearTimeout(this.dontPressCycleTimeout);
+      this.dontPressCycleTimeout = undefined;
+    }
+    if (this.dontPressVideoElement) {
+      this.dontPressVideoElement.removeEventListener('ended', this.handleDontPressVideoEnded);
+    }
+    if (this.dontPressImageTexture) {
+      this.dontPressImageTexture.dispose();
+      this.dontPressImageTexture = undefined;
+    }
+    if (this.dontPressVideoTexture) {
+      this.dontPressVideoTexture.dispose();
+      this.dontPressVideoTexture = undefined;
+    }
 
     // Clean up ColoredStatic video if it exists
     if (this.coloredStaticVideo) {
