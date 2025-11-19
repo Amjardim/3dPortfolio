@@ -2,8 +2,8 @@ import { Component, OnInit, OnDestroy, PLATFORM_ID, ViewChild, ElementRef, injec
 import { DOCUMENT, isPlatformBrowser, CommonModule } from '@angular/common';
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { FlyControls } from 'three/examples/jsm/controls/FlyControls';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { FlyControls } from 'three/examples/jsm/controls/FlyControls.js';
 
 // Constants
 const CAMERA_CONFIG = {
