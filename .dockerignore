@@ -1,0 +1,48 @@
+# ---- Node / Angular ----
+node_modules
+.angular
+dist
+.tmp
+.cache
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Environment files (do NOT send secrets to Docker build context)
+*.env
+*.env.local
+*.env.development
+*.env.production
+*.env.test
+
+# IDE / Editor folders
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Angular specific
+.angular/cache
+**/*.tsbuildinfo
+
+# Tests
+coverage
+test-results
+karma.conf.js
+
+# Git
+.git
+.gitignore
+
+# Nginx (you already COPY it manually)
+nginx/default.conf
+
+# Misc build output
+*.tgz
