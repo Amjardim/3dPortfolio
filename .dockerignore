@@ -41,8 +41,5 @@ karma.conf.js
 .git
 .gitignore
 
-# Nginx (you already COPY it manually)
-nginx/default.conf
-
 # Misc build output
 *.tgz
