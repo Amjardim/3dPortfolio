@@ -215,7 +215,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
 
     const loader = new GLTFLoader();
-    loader.load('https://localhost:7211/models/old_computers_complete.glb', async (glb) => {
+    loader.load('http://localhost:5000/models/old_computers_complete.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
       this.scene.add(model);
