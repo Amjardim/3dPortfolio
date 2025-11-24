@@ -17,6 +17,7 @@
         "build": {
           "builder": "@angular-devkit/build-angular:application",
           "options": {
+            "baseHref": "/3dPortfolio/",
             "outputPath": "dist/3d-portfolio",
             "index": "src/index.html",
             "browser": "src/main.ts",
