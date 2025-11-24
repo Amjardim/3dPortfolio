@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, PLATFORM_ID, ViewChild, ElementRef, inject } from '@angular/core';
-import { DOCUMENT, isPlatformBrowser, CommonModule } from '@angular/common';
+import { isPlatformBrowser, CommonModule } from '@angular/common';
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -16,7 +16,7 @@ const CAMERA_CONFIG = {
 
 const MOVEMENT_CONFIG = {
   BASE_SPEED: 2.0,
-  MAX_ROLL_ANGLE: Math.PI / 12, // 15 degrees
+  MAX_ROLL_ANGLE: Math.PI / 12,
   PERSON_HEIGHT: 5.5,
   BOUNDS_PADDING: 0.5
 } as const;
@@ -27,8 +27,8 @@ const RENDERER_CONFIG = {
 } as const;
 
 const TRANSITION_CONFIG = {
-  DURATION: 1000, // 1 second
-  EASING: (t: number) => t * (2 - t) // Ease-out
+  DURATION: 1000,
+  EASING: (t: number) => t * (2 - t)
 } as const;
 
 const TEXTURE_CONFIG = {
@@ -101,7 +101,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
   public renderer!: THREE.WebGLRenderer;
 
   private readonly platformId = inject(PLATFORM_ID);
-  private readonly document = inject(DOCUMENT);
   @ViewChild('container', { static: true }) private containerRef!: ElementRef<HTMLDivElement>;
 
   private animateHandle?: number;
@@ -323,7 +322,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
         }
       });
 
-      // Search for LightBulb (can be any Object3D type, not just Mesh)
+      // Search for LightBulb
       if (!this.lightBulb) {
         this.scene.traverse((obj) => {
           const name = obj.name.toLowerCase();
@@ -337,11 +336,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
         });
       }
 
-      highlightObjectNames.forEach((name) => {
-        if (!foundHighlightNames.has(name)) {
-          console.warn(`Highlight target not found: ${name}`);
-        }
-      });
 
       // Apply different content to monitors
       const monitorConfigs: MonitorConfig[] = [
@@ -369,11 +363,10 @@ export class CanvasComponent implements OnInit, OnDestroy {
           fontFamily: 'Segoe UI',
           fontWeight: '600',
           padding: 240,
-          emissiveIntensity: 0 // No light emission - just regular material like paper
+          emissiveIntensity: 0 // No light emission
         });
       }
 
-      // Setup mouse interaction for monitors
       this.setupMonitorInteraction();
 
       this.render();
@@ -435,7 +428,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
         if (this.isDontPressConfig(config)) {
           this.setupDontPressMonitor(monitor, config.path);
         } else {
-          this.applyImageTexture(monitor, config.path).catch(console.error);
+          this.applyImageTexture(monitor, config.path).catch(() => {});
         }
         break;
     }
@@ -1085,9 +1078,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     }
 
     video.loop = loop;
-    video.play().catch((err) => {
-      console.warn('Video autoplay failed:', err);
-    });
+      video.play().catch(() => {});
 
     const texture = new THREE.VideoTexture(video);
     this.configureTextureSettings(texture, false); // Video textures don't need mipmaps
@@ -1110,7 +1101,6 @@ export class CanvasComponent implements OnInit, OnDestroy {
         },
         undefined,
         (error) => {
-          console.error('Error loading image texture:', error);
           reject(error);
         }
       );
@@ -1156,9 +1146,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
           this.showDontPressImage();
         },
         undefined,
-        (error) => {
-          console.error('Error loading DontPress texture:', error);
-        }
+        () => {}
       );
     }
 
@@ -1226,9 +1214,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     this.applyTexture(this.dontPressMonitor, this.dontPressVideoTexture, TEXTURE_CONFIG.VIDEO_EMISSIVE_INTENSITY, true);
     this.dontPressVideoElement.currentTime = 0;
-    this.dontPressVideoElement.play().catch((err) => {
-      console.warn('DontPress video play failed:', err);
-    });
+    this.dontPressVideoElement.play().catch(() => {});
   }
 
   private handleDontPressVideoEnded = (): void => {
@@ -1264,10 +1250,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
-    if (!context) {
-      console.error('Failed to get canvas context');
-      return;
-    }
+    if (!context) return;
 
     canvas.width = TEXTURE_CONFIG.CANVAS_SIZE;
     canvas.height = TEXTURE_CONFIG.CANVAS_SIZE;
@@ -1433,7 +1416,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       video.volume = shouldEnableAudio ? 1 : 0;
 
       if (shouldEnableAudio) {
-        video.play().catch((err) => console.warn('Video audio resume failed:', err));
+        video.play().catch(() => {});
       }
     });
   }
@@ -1695,9 +1678,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       if (!this.audioElement.src || this.audioElement.src.endsWith('undefined')) {
         this.loadCurrentSong();
       }
-      this.audioElement.play().catch((err) => {
-        console.warn('Audio play failed:', err);
-      });
+      this.audioElement.play().catch(() => {});
       this.isPlaying = true;
     }
     this.drawMusicPlayer();
@@ -1954,9 +1935,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
       });
 
       // Play video once
-      video.play().catch((err) => {
-        console.warn('ColoredStatic video play failed:', err);
-        // If video fails to play, turn off monitors immediately
+      video.play().catch(() => {
         this.turnOffAllMonitors();
       });
 
