@@ -3,6 +3,7 @@ import { isPlatformBrowser, CommonModule } from '@angular/common';
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { FlyControls } from 'three/examples/jsm/controls/FlyControls.js';
 
 // Constants
@@ -214,6 +215,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
 
     const loader = new GLTFLoader();
+
+    loader.setMeshoptDecoder(MeshoptDecoder);
+
     loader.load('assets/models/old_computers_compressed.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
