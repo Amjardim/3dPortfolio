@@ -214,7 +214,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
 
     const loader = new GLTFLoader();
-    loader.load('https://github.com/Amjardim/3dPortfolio/releases/download/v1.0/old_computers_complete.glb', async (glb) => {
+    loader.load('assets/models/old_computers_compressed.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
       this.scene.add(model);
