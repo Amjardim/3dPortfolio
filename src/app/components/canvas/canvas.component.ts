@@ -3,6 +3,7 @@ import { isPlatformBrowser, CommonModule } from '@angular/common';
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { FlyControls } from 'three/examples/jsm/controls/FlyControls.js';
 
@@ -218,6 +219,11 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     loader.setMeshoptDecoder(MeshoptDecoder);
 
+    // The model is Draco-compressed; decoder files are copied to /draco by angular.json
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('draco/');
+    loader.setDRACOLoader(dracoLoader);
+
     loader.load('assets/models/old_computers_compressed.glb', async (glb) => {
       const model = glb.scene;
       await this.renderer.compileAsync(model, this.camera, this.scene);
@@ -409,6 +415,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     container.addEventListener('mousemove', this.onMouseMove);
     container.addEventListener('click', this.onMouseClick);
+    window.addEventListener('keydown', this.onKeyDown);
     container.style.cursor = 'default';
   }
 
@@ -520,9 +527,9 @@ export class CanvasComponent implements OnInit, OnDestroy {
     }
     const intersects = this.raycaster.intersectObjects(interactiveTargets, true);
 
-    // If clicking outside interactive objects, exit focus states when applicable
+    // Clicking outside interactive objects exits any focus state
     if (intersects.length === 0) {
-      if (this.focusedMonitor === this.musicPlayerMonitor || this.focusedClipboard) {
+      if (this.focusedMonitor || this.focusedClipboard) {
         this.returnToPreviousPosition();
       }
       return;
@@ -745,11 +752,8 @@ export class CanvasComponent implements OnInit, OnDestroy {
     this.updateVideoAudioStates(null);
     this.stopMusicPlayback();
 
-    // Store current camera state
-    this.previousCameraState = {
-      position: this.camera.position.clone(),
-      quaternion: this.camera.quaternion.clone()
-    };
+    // Store the free-roam camera state; when hopping between focused objects keep the original
+    this.saveFreeRoamCameraState();
 
     // Calculate monitor's bounding box in world space
     monitor.updateMatrixWorld(true);
@@ -814,10 +818,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
 
     this.updateVideoAudioStates(null);
 
-    this.previousCameraState = {
-      position: this.camera.position.clone(),
-      quaternion: this.camera.quaternion.clone()
-    };
+    this.saveFreeRoamCameraState();
 
     clipboard.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(clipboard);
@@ -910,6 +911,24 @@ export class CanvasComponent implements OnInit, OnDestroy {
       }
     });
   }
+
+  /**
+   * Remember where the camera was before focusing; only the first focus from free roam is saved,
+   * so exiting after hopping between monitors returns to the room, not to the previous monitor.
+   */
+  private saveFreeRoamCameraState(): void {
+    if (this.focusedMonitor || this.focusedClipboard) return;
+    this.previousCameraState = {
+      position: this.camera.position.clone(),
+      quaternion: this.camera.quaternion.clone()
+    };
+  }
+
+  private onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && (this.focusedMonitor || this.focusedClipboard)) {
+      this.returnToPreviousPosition();
+    }
+  };
 
   /**
    * Return camera to previous first-person position
@@ -2036,6 +2055,7 @@ export class CanvasComponent implements OnInit, OnDestroy {
     }
 
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('keydown', this.onKeyDown);
     if (this.animateHandle) cancelAnimationFrame(this.animateHandle);
   }
 }
